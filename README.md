@@ -61,7 +61,8 @@ powershell -ExecutionPolicy Bypass -File scripts/start_backlog_visualizer.ps1
 - exposes MCP tools and typed arguments;
 - runs as an external stdio MCP process;
 - sends one JSON command per TCP connection to `127.0.0.1:8765`;
-- reads the complete bridge response with a finite timeout;
+- half-closes each completed request and reads the complete bridge response
+  with a finite timeout;
 - contains no direct `RPR_*` calls.
 
 ### REAPER bridge
@@ -181,7 +182,7 @@ most include additional identity and raw/readable fields useful to clients.
 | `set_track_solo` | Mutation | `track_index: int`, `solo: bool` | Set normal solo state on one validated track. | Requested and applied solo state. | `{"track_index": 2, "solo": true}` |
 | `create_note_item` | Mutation | `track_index: int`, `start_measure: int`, `duration_measures: int`, `text: str` | Create an empty item with `P_NOTES`, no take/source, exact measure boundaries, and no overlap. | New item GUID/index, text, requested measures, seconds, and verified success. | `{"track_index": 9, "start_measure": 3, "duration_measures": 2, "text": "Am7"}` |
 | `create_midi_item` | Mutation | `track_index: int`, `start_measure: int`, exclusive `end_measure: int`, `notes: list[object]` | Create a non-overlapping MIDI item after validating every independently positioned note. | New item/take identity, boundaries, created note read-back, and success. | `{"track_index": 9, "start_measure": 3, "end_measure": 5, "notes": [{"note_name": "C4", "start_measure": 1, "start_beat": 1.0, "duration_qn": 1.0, "velocity": 100}]}` |
-| `replace_midi_item_content` | Mutation | `track_index: int`, `item_guid: str`, `notes: list[object]` | Validate a complete payload, clear every old MIDI event, insert only the replacement notes, and roll back after unexpected post-clear failure. Empty `notes` intentionally clears the take. | Stable item/take identity, previous counts, replacement notes, boundaries, and verified success. | `{"track_index": 9, "item_guid": "{ITEM-GUID}", "notes": []}` |
+| `replace_midi_item_content` | Mutation | `track_index: int`, `item_guid: str`, `notes: list[object]` | Bulk-replace every MIDI event using either the legacy note shape or bar/beat/offset positions; validate first and roll back after unexpected post-clear failure. Empty `notes` intentionally clears the take. | Stable item/take identity, previous counts, normalized replacement notes, boundaries, and verified success. | `{"track_index": 9, "item_guid": "{ITEM-GUID}", "notes": []}` |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -226,6 +227,31 @@ the entire payload before clearing notes, CC/pitch/program/pressure events, and
 text/sysex. `notes: []` is an explicit clear operation that leaves the item in
 place. The item GUID, position, length, mute, and lock state are verified after
 replacement.
+
+For bulk musical input, each note may instead use `bar`, `beat`, `offset`, and
+`duration_beats`. `bar` is one-based and relative to the item; `offset` is a
+non-negative fractional displacement added to the one-based `beat`.
+`duration_beats` uses the effective local time-signature denominator, so one
+beat is one quarter note in 4/4 and one eighth note in 6/8. Do not mix this shape
+with `start_measure`, `start_beat`, or `duration_qn` in the same note. Responses
+normalize positions to `start_measure`, `start_beat`, and `duration_qn`.
+
+```json
+{
+  "track_index": 1,
+  "item_guid": "{ITEM-GUID}",
+  "notes": [
+    {
+      "bar": 1,
+      "beat": 1,
+      "offset": 0.5,
+      "duration_beats": 0.25,
+      "pitch": 42,
+      "velocity": 90
+    }
+  ]
+}
+```
 
 ## End-to-end examples
 

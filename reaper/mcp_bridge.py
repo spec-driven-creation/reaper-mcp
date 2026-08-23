@@ -8,6 +8,8 @@ import uuid
 
 HOST = "127.0.0.1"
 PORT = 8765
+REQUEST_CHUNK_SIZE = 4096
+MAX_REQUEST_BYTES = 4 * 1024 * 1024
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -3023,9 +3025,87 @@ def validate_midi_note_payload(
             else get_midi_pitch(note.get("note_name"))
         )
         velocity = note.get("velocity")
-        duration_qn = note.get("duration_qn")
-        note_start_measure = note.get("start_measure")
-        note_start_beat = note.get("start_beat")
+        legacy_fields = {"start_measure", "start_beat", "duration_qn"}
+        musical_fields = {"bar", "beat", "offset", "duration_beats"}
+        has_legacy_shape = bool(legacy_fields.intersection(note))
+        has_musical_shape = bool(musical_fields.intersection(note))
+
+        if has_legacy_shape == has_musical_shape:
+            return None, {
+                "error": "invalid_midi_note",
+                "note_index": note_index,
+                "field": "musical_position",
+                "message": (
+                    "provide exactly one complete position shape: "
+                    "start_measure/start_beat/duration_qn or "
+                    "bar/beat/offset/duration_beats"
+                )
+            }
+
+        if has_musical_shape:
+            missing_fields = musical_fields.difference(note)
+
+            if missing_fields:
+                return None, {
+                    "error": "invalid_midi_note",
+                    "note_index": note_index,
+                    "field": "musical_position",
+                    "message": "missing fields: " + ", ".join(
+                        sorted(missing_fields)
+                    )
+                }
+
+            note_start_measure = note.get("bar")
+            beat = note.get("beat")
+            offset = note.get("offset")
+            duration_beats = note.get("duration_beats")
+
+            for field, value in (
+                ("beat", beat),
+                ("offset", offset),
+                ("duration_beats", duration_beats)
+            ):
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(value)
+                ):
+                    return None, {
+                        "error": "invalid_midi_note",
+                        "note_index": note_index,
+                        "field": field,
+                        "message": f"{field} must be a finite number"
+                    }
+
+            if beat < 1.0 or offset < 0.0 or duration_beats <= 0.0:
+                return None, {
+                    "error": "invalid_midi_note",
+                    "note_index": note_index,
+                    "field": "musical_position",
+                    "message": (
+                        "beat must be at least 1, offset must be non-negative, "
+                        "and duration_beats must be positive"
+                    )
+                }
+
+            note_start_beat = float(beat) + float(offset)
+            duration_qn = None
+        else:
+            missing_fields = legacy_fields.difference(note)
+
+            if missing_fields:
+                return None, {
+                    "error": "invalid_midi_note",
+                    "note_index": note_index,
+                    "field": "musical_position",
+                    "message": "missing fields: " + ", ".join(
+                        sorted(missing_fields)
+                    )
+                }
+
+            note_start_measure = note.get("start_measure")
+            note_start_beat = note.get("start_beat")
+            duration_qn = note.get("duration_qn")
 
         if has_pitch and (
             not isinstance(pitch, int)
@@ -3061,7 +3141,7 @@ def validate_midi_note_payload(
                 "message": "velocity must be an integer from 1 through 127"
             }
 
-        if (
+        if not has_musical_shape and (
             not isinstance(duration_qn, (int, float))
             or isinstance(duration_qn, bool)
             or not math.isfinite(duration_qn)
@@ -3116,6 +3196,15 @@ def validate_midi_note_payload(
                 0, float(note_start_beat) - 1.0, absolute_measure - 1
             )[0]
             note_start_qn = RPR_TimeMap2_timeToQN(0, note_start_seconds)
+            if has_musical_shape:
+                time_signature = get_musical_position(
+                    note_start_seconds
+                )["musical_position"]["time_signature"]
+                duration_qn = (
+                    float(duration_beats)
+                    * 4.0
+                    / time_signature["denominator"]
+                )
             note_end_qn = note_start_qn + float(duration_qn)
             note_end_seconds = RPR_TimeMap2_QNToTime(0, note_end_qn)
         except Exception as position_error:
@@ -3891,12 +3980,36 @@ def handle_get_fx_presets(request):
         "preset_count": preset_index_info[3]
     }
 
+def receive_request(client):
+    chunks = []
+    byte_count = 0
+
+    while True:
+        try:
+            chunk = client.recv(REQUEST_CHUNK_SIZE)
+        except socket.timeout:
+            if chunks:
+                break
+            raise
+
+        if not chunk:
+            break
+
+        byte_count += len(chunk)
+
+        if byte_count > MAX_REQUEST_BYTES:
+            raise ValueError("request exceeds maximum size")
+
+        chunks.append(chunk)
+
+    return b"".join(chunks)
+
 def loop():
     try:
         client, address = server.accept()
         client.settimeout(0.1)
 
-        data = client.recv(4096)
+        data = receive_request(client)
 
         if data:
             response = process_request(data.decode("utf-8"))

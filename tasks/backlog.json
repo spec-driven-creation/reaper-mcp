@@ -899,10 +899,10 @@
       "id": "WR-009",
       "category": "mutation",
       "title": "Replace MIDI item content",
-      "status": "completed",
+      "status": "testing",
       "priority": "medium",
       "capability": "replace_midi_item_content",
-      "description": "Atomically replace every MIDI event in an existing GUID-identified MIDI item with a validated complete note payload.",
+      "description": "Atomically replace every MIDI event in an existing GUID-identified MIDI item with a validated complete bulk note payload using legacy or bar/beat/offset musical positions.",
       "depends_on": ["WR-008", "RO-017"],
       "acceptance_criteria": [
         "Resolve the target by one-based track_index plus exact item_guid, verify track ownership, and reject missing, mismatched, or non-MIDI targets.",
@@ -910,12 +910,22 @@
         "Clear all previous MIDI events before inserting the replacement so notes, CC, pitch bend, program changes, pressure, text, sysex, and other stale events are not preserved.",
         "Allow an empty notes array to intentionally clear all MIDI content while preserving the MediaItem.",
         "Support independently positioned notes including chords, overlaps, and gaps.",
+        "Accept bar, beat, offset, and duration_beats as an alternative musical note shape and resolve it through the effective REAPER time-signature map.",
+        "Receive and process a single request containing at least 100 notes without truncating the TCP/JSON payload or sorting after each note.",
         "Preserve the MediaItem GUID, track assignment, position, length, mute state, lock state, and placement.",
         "Read back and verify item identity and boundaries plus the complete replacement note payload before reporting success.",
         "Reject invalid replacement input without changing existing MIDI content and restore the original event stream after an unexpected post-clear failure when safely practical.",
         "Runtime-test complete replacement, event clearing, empty replacement, validation safety, target errors, item preservation, and visual MIDI-editor behavior against REAPER."
       ],
-      "bugs": []
+      "bugs": [
+        {
+          "id": "BUG-012",
+          "description": "The REAPER bridge reads each TCP request with one recv(4096), so a valid bulk MIDI payload above 4096 bytes is truncated, JSON decoding raises, and the client observes a closed connection without a response.",
+          "status": "fixed",
+          "discovered_during": "runtime-validation",
+          "fixed_in": null
+        }
+      ]
     },
     {
       "id": "TL-015",

@@ -22,6 +22,7 @@ def send_reaper_command(command: str, **arguments) -> dict:
         }
 
         sock.sendall(json.dumps(request).encode("utf-8"))
+        sock.shutdown(socket.SHUT_WR)
 
         response_chunks = []
 
@@ -453,7 +454,7 @@ def replace_midi_item_content(
     item_guid: str,
     notes: list[dict]
 ) -> dict:
-    """Replace every MIDI event in one GUID-identified MIDI item."""
+    """Bulk-replace MIDI using legacy or bar/beat/offset note positions."""
     return send_reaper_command(
         "replace_midi_item_content",
         track_index=track_index,
