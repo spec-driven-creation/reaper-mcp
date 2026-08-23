@@ -1177,6 +1177,42 @@
         "Read the renamed region back and return its previous and applied names plus verified region state."
       ],
       "bugs": []
+    },
+    {
+      "id": "WR-020",
+      "category": "mutation",
+      "title": "Resize item to measure boundary",
+      "status": "testing",
+      "priority": "high",
+      "capability": "set_item_end_measure",
+      "description": "Change one GUID-identified media item's exclusive end to an exact project measure boundary without moving its start or overlapping another item.",
+      "depends_on": ["RO-003"],
+      "acceptance_criteria": [
+        "Resolve the target from a validated one-based track index and exact item GUID.",
+        "Validate a positive exclusive end_measure after the item's existing start position.",
+        "Reject the mutation when the resized range would overlap another item on the track.",
+        "Change only D_LENGTH and verify the applied item identity and musical end boundary before reporting success.",
+        "Runtime-test extending the existing track-2 click source from measure 41 through measure 47."
+      ],
+      "bugs": []
+    },
+    {
+      "id": "WR-021",
+      "category": "mutation",
+      "title": "Create native click-source item",
+      "status": "testing",
+      "priority": "high",
+      "capability": "create_click_source_item",
+      "description": "Create a native REAPER CLICK-source media item on one track at exact project measure boundaries.",
+      "depends_on": ["RO-003"],
+      "acceptance_criteria": [
+        "Validate the track and positive one-based start and exclusive end measures before mutation.",
+        "Reject creation when the requested range overlaps an existing item on the track.",
+        "Create one media item, one take, and a native CLICK PCM source using only bridge-side REAPER APIs.",
+        "Read back the item boundaries, take count, and CLICK source type before reporting success.",
+        "Remove a partially created item when initialization or verification fails."
+      ],
+      "bugs": []
     }
   ]
 }

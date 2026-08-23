@@ -442,6 +442,34 @@ def create_note_item(
     )
 
 @mcp.tool()
+def set_item_end_measure(
+    track_index: int,
+    item_guid: str,
+    end_measure: int
+) -> dict:
+    """Resize one GUID-identified item to an exact measure boundary."""
+    return send_reaper_command(
+        "set_item_end_measure",
+        track_index=track_index,
+        item_guid=item_guid,
+        end_measure=end_measure
+    )
+
+@mcp.tool()
+def create_click_source_item(
+    track_index: int,
+    start_measure: int,
+    end_measure: int
+) -> dict:
+    """Create a native REAPER click-source item at measure boundaries."""
+    return send_reaper_command(
+        "create_click_source_item",
+        track_index=track_index,
+        start_measure=start_measure,
+        end_measure=end_measure
+    )
+
+@mcp.tool()
 def create_midi_item(
     track_index: int,
     start_measure: int,

@@ -182,6 +182,8 @@ most include additional identity and raw/readable fields useful to clients.
 | `set_track_record_arm` | Mutation | `track_index: int`, `armed: bool` | Arm or disarm one validated track for recording without changing its input, monitoring, or other tracks. | Requested and applied record-arm state. | `{"track_index": 10, "armed": true}` |
 | `set_track_solo` | Mutation | `track_index: int`, `solo: bool` | Set normal solo state on one validated track. | Requested and applied solo state. | `{"track_index": 2, "solo": true}` |
 | `create_note_item` | Mutation | `track_index: int`, `start_measure: int`, `duration_measures: int`, `text: str` | Create an empty item with `P_NOTES`, no take/source, exact measure boundaries, and no overlap. | New item GUID/index, text, requested measures, seconds, and verified success. | `{"track_index": 9, "start_measure": 3, "duration_measures": 2, "text": "Am7"}` |
+| `set_item_end_measure` | Mutation | `track_index: int`, `item_guid: str`, exclusive `end_measure: int` | Resize one item to an exact measure boundary without moving its start; reject overlap with other items. | Previous and applied item state plus verified success. | `{"track_index": 2, "item_guid": "{ITEM-GUID}", "end_measure": 47}` |
+| `create_click_source_item` | Mutation | `track_index: int`, `start_measure: int`, exclusive `end_measure: int` | Create a non-overlapping native REAPER `CLICK` source item at exact measure boundaries. | Item/take identity, source type, applied boundaries, and verified success. | `{"track_index": 2, "start_measure": 41, "end_measure": 47}` |
 | `create_midi_item` | Mutation | `track_index: int`, `start_measure: int`, exclusive `end_measure: int`, `notes: list[object]` | Create a non-overlapping MIDI item after validating every note through the same legacy-or-bar/beat/offset contract used by replacement. | New item/take identity, boundaries, created note read-back, and success. | `{"track_index": 9, "start_measure": 3, "end_measure": 5, "notes": [{"pitch": 60, "bar": 1, "beat": 1, "offset": 0, "duration_beats": 1, "velocity": 100}]}` |
 | `replace_midi_item_content` | Mutation | `track_index: int`, `item_guid: str`, `notes: list[object]` | Bulk-replace every MIDI event using either the legacy note shape or bar/beat/offset positions; validate first and roll back after unexpected post-clear failure. Empty `notes` intentionally clears the take. | Stable item/take identity, previous counts, normalized replacement notes, boundaries, and verified success. | `{"track_index": 9, "item_guid": "{ITEM-GUID}", "notes": []}` |
 | `replace_drum_item_content` | Mutation | `track_index: int`, `item_guid: str`, `mapping_id: str`, `events: list[object]` | Resolve explicitly selected Krimh drum semantics, then delegate one numeric-pitch bulk replacement to `replace_midi_item_content`. | Generic MIDI read-back plus mapping identity and semantic resolution metadata. | `{"track_index": 1, "item_guid": "{ITEM-GUID}", "mapping_id": "krimh-drums", "events": [{"bar": 1, "beat": 1, "offset": 0, "duration_beats": 0.25, "drum": "kick", "articulation": "main", "velocity": 105}]}` |
@@ -222,6 +224,14 @@ overlaps are allowed. REAPER time-map and MIDI PPQ conversion remain internal.
 
 `create_note_item` creates an empty MediaItem with text stored in `P_NOTES`.
 It creates no audio/MIDI take and rejects blank text or an occupied time range.
+
+### Resize and create click-source items
+
+`set_item_end_measure` keeps the item's existing start position and changes only
+its length so its end lands at the requested exclusive project measure. Both it
+and `create_click_source_item` reject overlap with another item on the target
+track. Click creation produces one take backed by REAPER's native `CLICK` PCM
+source and verifies its source type and boundaries after creation.
 
 ### Replace MIDI content
 

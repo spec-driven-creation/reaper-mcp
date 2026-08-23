@@ -1235,13 +1235,18 @@ def get_measure_boundary(measure):
         0, measure - 1, 0.0, 0.0, 0, 0, 0.0
     )[0]
 
-def get_item_conflicts(track, position_seconds, end_seconds):
+def get_item_conflicts(
+    track, position_seconds, end_seconds, excluded_item_guid=None
+):
     conflicts = []
     boundary_tolerance_seconds = 1e-9
 
     for reaper_item_index in range(RPR_CountTrackMediaItems(track)):
         existing_item = RPR_GetTrackMediaItem(track, reaper_item_index)
         existing = get_item_state(existing_item, reaper_item_index + 1)
+
+        if existing["guid"] == excluded_item_guid:
+            continue
 
         if (
             position_seconds
@@ -3073,6 +3078,190 @@ def handle_create_note_item(request):
         "success": success
     }
 
+def handle_set_item_end_measure(request):
+    context, error = resolve_item_by_guid(request)
+
+    if error is not None:
+        return error
+
+    end_measure = request.get("end_measure")
+
+    if (
+        not isinstance(end_measure, int)
+        or isinstance(end_measure, bool)
+        or end_measure < 1
+    ):
+        return {"error": "end_measure must be a 1-based positive integer"}
+
+    previous = get_item_state(context["item"], context["item_index"])
+    end_seconds = get_measure_boundary(end_measure)
+    duration_seconds = end_seconds - previous["position_seconds"]
+
+    if (
+        not math.isfinite(end_seconds)
+        or not math.isfinite(duration_seconds)
+        or duration_seconds <= 0.0
+    ):
+        return {
+            "error": "end_measure must be after the item's start position"
+        }
+
+    conflicts = get_item_conflicts(
+        context["track"],
+        previous["position_seconds"],
+        end_seconds,
+        excluded_item_guid=context["item_guid"]
+    )
+
+    if conflicts:
+        return {
+            "error": "item_overlap",
+            "item_guid": context["item_guid"],
+            "requested_end_measure": end_measure,
+            "conflicts": conflicts
+        }
+
+    length_written = RPR_SetMediaItemInfo_Value(
+        context["item"], "D_LENGTH", duration_seconds
+    )
+    RPR_UpdateArrange()
+
+    if not length_written:
+        return {"error": "REAPER failed to set the item length"}
+
+    applied = get_item_state(context["item"], context["item_index"])
+    success = (
+        applied["guid"] == context["item_guid"]
+        and math.isclose(
+            applied["end_seconds"], end_seconds,
+            rel_tol=1e-9, abs_tol=1e-9
+        )
+        and applied["end_measure"] == end_measure
+        and math.isclose(applied["end_beat"], 1.0, abs_tol=1e-7)
+    )
+
+    return {
+        "track_index": context["track_index"],
+        "track_name": context["track_name"],
+        "item_guid": context["item_guid"],
+        "requested_end_measure": end_measure,
+        "previous": previous,
+        "applied": applied,
+        "success": success
+    }
+
+def handle_create_click_source_item(request):
+    context, error = resolve_track(request)
+
+    if error is not None:
+        return error
+
+    start_measure = request.get("start_measure")
+    end_measure = request.get("end_measure")
+
+    if (
+        not isinstance(start_measure, int)
+        or isinstance(start_measure, bool)
+        or start_measure < 1
+    ):
+        return {"error": "start_measure must be a 1-based positive integer"}
+
+    if (
+        not isinstance(end_measure, int)
+        or isinstance(end_measure, bool)
+        or end_measure <= start_measure
+    ):
+        return {
+            "error": "end_measure must be an integer greater than start_measure"
+        }
+
+    position_seconds = get_measure_boundary(start_measure)
+    end_seconds = get_measure_boundary(end_measure)
+    duration_seconds = end_seconds - position_seconds
+
+    if (
+        not math.isfinite(position_seconds)
+        or not math.isfinite(end_seconds)
+        or duration_seconds <= 0.0
+    ):
+        return {"error": "REAPER returned invalid measure boundary positions"}
+
+    conflicts = get_item_conflicts(
+        context["track"], position_seconds, end_seconds
+    )
+
+    if conflicts:
+        return {
+            "error": "item_overlap",
+            "requested_range": {
+                "start_measure": start_measure,
+                "end_measure": end_measure,
+                "position_seconds": position_seconds,
+                "end_seconds": end_seconds
+            },
+            "conflicts": conflicts
+        }
+
+    item = RPR_AddMediaItemToTrack(context["track"])
+
+    if not item:
+        return {"error": "REAPER failed to create the media item"}
+
+    item_guid = get_item_identity(item)
+    position_written = RPR_SetMediaItemInfo_Value(
+        item, "D_POSITION", position_seconds
+    )
+    length_written = RPR_SetMediaItemInfo_Value(
+        item, "D_LENGTH", duration_seconds
+    )
+    take = RPR_AddTakeToMediaItem(item)
+    source = RPR_PCM_Source_CreateFromType("CLICK")
+
+    if not position_written or not length_written or not take or not source:
+        delete_created_item(context["track"], item, item_guid)
+        return {"error": "REAPER failed to initialize the click-source item"}
+
+    RPR_SetMediaItemTake_Source(take, source)
+    RPR_UpdateArrange()
+
+    item_index = find_item_index(context["track"], item_guid)
+    applied = get_item_state(item, item_index)
+    take_count = RPR_CountTakes(item)
+    active_take = RPR_GetActiveTake(item)
+    source_type = get_take_source_type(active_take) if active_take else ""
+    take_name = RPR_GetTakeName(active_take) if active_take else ""
+    success = (
+        item_index is not None
+        and take_count == 1
+        and source_type == "CLICK"
+        and math.isclose(
+            applied["position_seconds"], position_seconds,
+            rel_tol=1e-9, abs_tol=1e-9
+        )
+        and math.isclose(
+            applied["end_seconds"], end_seconds,
+            rel_tol=1e-9, abs_tol=1e-9
+        )
+    )
+
+    if not success:
+        delete_created_item(context["track"], item, item_guid)
+        return {"error": "click-source item failed read-back verification"}
+
+    return {
+        "track_index": context["track_index"],
+        "track_name": context["track_name"],
+        "item_index": item_index,
+        "item_guid": item_guid,
+        "start_measure": start_measure,
+        "end_measure": end_measure,
+        "take_count": take_count,
+        "take_name": take_name,
+        "source_type": source_type,
+        "applied": applied,
+        "success": True
+    }
+
 def validate_midi_note_payload(
     requested_notes, position_seconds, end_seconds, start_measure
 ):
@@ -3977,6 +4166,8 @@ COMMAND_HANDLERS = {
     "set_track_record_arm": handle_set_track_record_arm,
     "set_track_solo": handle_set_track_solo,
     "create_note_item": handle_create_note_item,
+    "set_item_end_measure": handle_set_item_end_measure,
+    "create_click_source_item": handle_create_click_source_item,
     "create_midi_item": handle_create_midi_item,
     "replace_midi_item_content": handle_replace_midi_item_content,
 }
