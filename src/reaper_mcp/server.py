@@ -217,6 +217,13 @@ def create_region(
     )
 
 @mcp.tool()
+def rename_region(region_number: int, new_name: str) -> dict:
+    """Rename one project region identified by its project region number."""
+    return send_reaper_command(
+        "rename_region", region_number=region_number, new_name=new_name
+    )
+
+@mcp.tool()
 def create_named_track(
     name: str, track_index: int | None = None
 ) -> dict:

@@ -690,6 +690,88 @@ def handle_create_region(request):
         "region": created, "success": True
     }
 
+def handle_rename_region(request):
+    region_number = request.get("region_number")
+    new_name = request.get("new_name")
+
+    if (
+        not isinstance(region_number, int)
+        or isinstance(region_number, bool)
+        or region_number < 1
+    ):
+        return {"error": "region_number must be a positive integer"}
+    if not isinstance(new_name, str) or not new_name.strip():
+        return {"error": "new_name must be a non-blank string"}
+
+    new_name = new_name.strip()
+    if len(new_name) > 255:
+        return {"error": "new_name must not exceed 255 characters"}
+
+    regions = handle_get_markers_regions({})["regions"]
+    target = next((
+        region for region in regions
+        if region["region_number"] == region_number
+    ), None)
+    if target is None:
+        return {"error": "region_number does not identify an existing region"}
+
+    previous_name = target["name"]
+    write_succeeded = bool(RPR_SetProjectMarker3(
+        0,
+        region_number,
+        True,
+        target["start_seconds"],
+        target["end_seconds"],
+        new_name,
+        target["color"]
+    ))
+    if not write_succeeded:
+        return {"error": "REAPER failed to rename the region"}
+
+    renamed_regions = handle_get_markers_regions({})["regions"]
+    renamed = next((
+        region for region in renamed_regions
+        if region["region_number"] == region_number
+    ), None)
+    if (
+        renamed is None
+        or renamed["name"] != new_name
+        or not math.isclose(
+            renamed["start_seconds"], target["start_seconds"],
+            rel_tol=1e-9, abs_tol=1e-7
+        )
+        or not math.isclose(
+            renamed["end_seconds"], target["end_seconds"],
+            rel_tol=1e-9, abs_tol=1e-7
+        )
+        or renamed["color"] != target["color"]
+    ):
+        rollback_succeeded = bool(RPR_SetProjectMarker3(
+            0,
+            region_number,
+            True,
+            target["start_seconds"],
+            target["end_seconds"],
+            previous_name,
+            target["color"]
+        ))
+        return {
+            "error": "Region rename read-back verification failed",
+            "region_number": region_number,
+            "rollback_succeeded": rollback_succeeded
+        }
+
+    RPR_UpdateTimeline()
+    return {
+        "requested": {
+            "region_number": region_number,
+            "new_name": new_name
+        },
+        "previous_name": previous_name,
+        "region": renamed,
+        "success": True
+    }
+
 def handle_get_tracks(request):
     tracks = []
     folder_stack = []
@@ -3854,6 +3936,7 @@ COMMAND_HANDLERS = {
     "set_tempo_map_event": handle_set_tempo_map_event,
     "get_markers_regions": handle_get_markers_regions,
     "create_region": handle_create_region,
+    "rename_region": handle_rename_region,
     "get_tracks": handle_get_tracks,
     "create_named_track": handle_create_named_track,
     "rename_track": handle_rename_track,

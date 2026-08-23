@@ -1134,6 +1134,23 @@
           "fixed_in": "44c95165ac6f04c35ba23740b86529451978a419"
         }
       ]
+    },
+    {
+      "id": "WR-019",
+      "category": "mutation",
+      "title": "Rename project region",
+      "status": "testing",
+      "priority": "high",
+      "capability": "rename_region",
+      "description": "Rename one existing project region identified by its stable project region number without changing its boundaries, color, or unrelated timeline events.",
+      "depends_on": ["RO-008"],
+      "acceptance_criteria": [
+        "Resolve exactly one existing region from a validated positive integer region_number and reject marker or missing targets.",
+        "Validate and trim a non-blank new_name of at most 255 characters before mutation.",
+        "Change only the target region name while preserving its number, boundaries, color, and unrelated project markers and regions.",
+        "Read the renamed region back and return its previous and applied names plus verified region state."
+      ],
+      "bugs": []
     }
   ]
 }
