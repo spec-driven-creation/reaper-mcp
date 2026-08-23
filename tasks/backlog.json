@@ -870,6 +870,7 @@
         "Validate one-based track and measure inputs and resolve exclusive item boundaries through REAPER time-map APIs.",
         "Create a real MIDI MediaItem and take containing independently positioned notes with the established MIDI note-name convention.",
         "Accept exactly one of numeric pitch or human-readable note_name per note and normalize either representation to a valid MIDI pitch.",
+        "Accept the same bar, beat, offset, and duration_beats musical shape as replace_midi_item_content while preserving the established legacy shape.",
         "Require an explicit one-based start_measure and valid start_beat relative to the MIDI item for every note, resolved through REAPER time-map APIs.",
         "Validate pitches from 0 through 127, note names with explicit octaves, velocities from 1 through 127, and finite positive duration_qn values without clamping.",
         "Position every note independently so chords, overlapping notes, and gaps are supported.",
@@ -892,6 +893,13 @@
           "status": "fixed",
           "discovered_during": "runtime-validation",
           "fixed_in": "7a1fd3420da9183f3344895d4979612c6d5ac7ee"
+        },
+        {
+          "id": "BUG-013",
+          "description": "create_midi_item duplicates the legacy MIDI-note validator instead of using validate_midi_note_payload, so it rejects the supported bar/beat/offset/duration_beats shape that replace_midi_item_content accepts.",
+          "status": "fixed",
+          "discovered_during": "runtime-validation",
+          "fixed_in": null
         }
       ]
     },

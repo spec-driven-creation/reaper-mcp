@@ -181,7 +181,7 @@ most include additional identity and raw/readable fields useful to clients.
 | `set_track_record_arm` | Mutation | `track_index: int`, `armed: bool` | Arm or disarm one validated track for recording without changing its input, monitoring, or other tracks. | Requested and applied record-arm state. | `{"track_index": 10, "armed": true}` |
 | `set_track_solo` | Mutation | `track_index: int`, `solo: bool` | Set normal solo state on one validated track. | Requested and applied solo state. | `{"track_index": 2, "solo": true}` |
 | `create_note_item` | Mutation | `track_index: int`, `start_measure: int`, `duration_measures: int`, `text: str` | Create an empty item with `P_NOTES`, no take/source, exact measure boundaries, and no overlap. | New item GUID/index, text, requested measures, seconds, and verified success. | `{"track_index": 9, "start_measure": 3, "duration_measures": 2, "text": "Am7"}` |
-| `create_midi_item` | Mutation | `track_index: int`, `start_measure: int`, exclusive `end_measure: int`, `notes: list[object]` | Create a non-overlapping MIDI item after validating every independently positioned note. | New item/take identity, boundaries, created note read-back, and success. | `{"track_index": 9, "start_measure": 3, "end_measure": 5, "notes": [{"note_name": "C4", "start_measure": 1, "start_beat": 1.0, "duration_qn": 1.0, "velocity": 100}]}` |
+| `create_midi_item` | Mutation | `track_index: int`, `start_measure: int`, exclusive `end_measure: int`, `notes: list[object]` | Create a non-overlapping MIDI item after validating every note through the same legacy-or-bar/beat/offset contract used by replacement. | New item/take identity, boundaries, created note read-back, and success. | `{"track_index": 9, "start_measure": 3, "end_measure": 5, "notes": [{"pitch": 60, "bar": 1, "beat": 1, "offset": 0, "duration_beats": 1, "velocity": 100}]}` |
 | `replace_midi_item_content` | Mutation | `track_index: int`, `item_guid: str`, `notes: list[object]` | Bulk-replace every MIDI event using either the legacy note shape or bar/beat/offset positions; validate first and roll back after unexpected post-clear failure. Empty `notes` intentionally clears the take. | Stable item/take identity, previous counts, normalized replacement notes, boundaries, and verified success. | `{"track_index": 9, "item_guid": "{ITEM-GUID}", "notes": []}` |
 
 <!-- markdownlint-enable MD013 -->
@@ -191,7 +191,9 @@ most include additional identity and raw/readable fields useful to clients.
 ### Create a MIDI item
 
 The item uses absolute, one-based project measures. `end_measure` is exclusive.
-Every note uses a one-based measure relative to the beginning of that item:
+Every note uses a one-based measure relative to the beginning of that item.
+Creation and replacement both accept the current `bar`, `beat`, `offset`, and
+`duration_beats` shape documented below, or the legacy shape shown here:
 
 ```json
 {
