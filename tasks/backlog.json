@@ -923,7 +923,7 @@
           "description": "The REAPER bridge reads each TCP request with one recv(4096), so a valid bulk MIDI payload above 4096 bytes is truncated, JSON decoding raises, and the client observes a closed connection without a response.",
           "status": "fixed",
           "discovered_during": "runtime-validation",
-          "fixed_in": null
+          "fixed_in": "566d0674e4255201006c461f3de8ace0c19f9a1d"
         }
       ]
     },
