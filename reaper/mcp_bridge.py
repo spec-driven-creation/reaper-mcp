@@ -1237,14 +1237,17 @@ def get_measure_boundary(measure):
 
 def get_item_conflicts(track, position_seconds, end_seconds):
     conflicts = []
+    boundary_tolerance_seconds = 1e-9
 
     for reaper_item_index in range(RPR_CountTrackMediaItems(track)):
         existing_item = RPR_GetTrackMediaItem(track, reaper_item_index)
         existing = get_item_state(existing_item, reaper_item_index + 1)
 
         if (
-            position_seconds < existing["end_seconds"]
-            and end_seconds > existing["position_seconds"]
+            position_seconds
+            < existing["end_seconds"] - boundary_tolerance_seconds
+            and end_seconds
+            > existing["position_seconds"] + boundary_tolerance_seconds
         ):
             conflicts.append({
                 "item_index": existing["item_index"],

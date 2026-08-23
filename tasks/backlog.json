@@ -900,6 +900,13 @@
           "status": "fixed",
           "discovered_during": "runtime-validation",
           "fixed_in": null
+        },
+        {
+          "id": "BUG-014",
+          "description": "Shared item overlap detection compares raw floating-point seconds without tolerance, so measure-adjacent MIDI creation can be rejected as item_overlap when the resolved boundary differs by sub-picoseconds.",
+          "status": "fixed",
+          "discovered_during": "runtime-validation",
+          "fixed_in": null
         }
       ]
     },
