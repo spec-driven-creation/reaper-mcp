@@ -3,6 +3,8 @@ import socket
 
 from mcp.server.mcpserver import MCPServer
 
+from reaper_mcp.drum_mapping import DrumMappingError, resolve_drum_events
+
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -468,6 +470,31 @@ def replace_midi_item_content(
         item_guid=item_guid,
         notes=notes
     )
+
+@mcp.tool()
+def replace_drum_item_content(
+    track_index: int,
+    item_guid: str,
+    mapping_id: str,
+    events: list[dict]
+) -> dict:
+    """Resolve semantic drum events, then bulk-replace one MIDI item."""
+    try:
+        notes, resolutions = resolve_drum_events(mapping_id, events)
+    except DrumMappingError as error:
+        return error.as_dict()
+
+    response = send_reaper_command(
+        "replace_midi_item_content",
+        track_index=track_index,
+        item_guid=item_guid,
+        notes=notes
+    )
+    return {
+        **response,
+        "mapping_id": mapping_id,
+        "resolved_events": resolutions,
+    }
 
 @mcp.tool()
 def ping() -> str:

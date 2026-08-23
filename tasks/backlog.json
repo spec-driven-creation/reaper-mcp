@@ -907,7 +907,7 @@
       "id": "WR-009",
       "category": "mutation",
       "title": "Replace MIDI item content",
-      "status": "testing",
+      "status": "completed",
       "priority": "medium",
       "capability": "replace_midi_item_content",
       "description": "Atomically replace every MIDI event in an existing GUID-identified MIDI item with a validated complete bulk note payload using legacy or bar/beat/offset musical positions.",
@@ -1136,10 +1136,29 @@
       ]
     },
     {
+      "id": "WR-018",
+      "category": "mutation",
+      "title": "Resolve Krimh drum articulations",
+      "status": "completed",
+      "priority": "high",
+      "capability": "replace_drum_item_content",
+      "description": "Resolve explicitly selected Krimh Drums semantic articulations to verified MIDI pitches before delegating one bulk replacement to the generic MIDI operation.",
+      "depends_on": ["WR-009"],
+      "acceptance_criteria": [
+        "Store the verified krimh-drums articulation mapping declaratively with integer MIDI pitches and preserved alternate Note 2 assignments.",
+        "Require the explicit mapping id krimh-drums and reject unknown mappings, articulations, or invalid mapping data without a General MIDI fallback.",
+        "Accept semantic drum events, resolve their drum and articulation fields before the bridge boundary, and send only numeric pitches to replace_midi_item_content.",
+        "Preserve the generic create_midi_item and replace_midi_item_content contracts without adding drum semantics to the REAPER bridge.",
+        "Read and return the existing bulk MIDI verification response together with the mapping identity and semantic-to-pitch resolution metadata.",
+        "Runtime-test the four-bar Krimh kick, snare, closed-hat, and crash pattern against the running Kontakt instance."
+      ],
+      "bugs": []
+    },
+    {
       "id": "WR-019",
       "category": "mutation",
       "title": "Rename project region",
-      "status": "testing",
+      "status": "completed",
       "priority": "high",
       "capability": "rename_region",
       "description": "Rename one existing project region identified by its stable project region number without changing its boundaries, color, or unrelated timeline events.",

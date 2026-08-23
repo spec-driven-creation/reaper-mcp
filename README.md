@@ -184,6 +184,7 @@ most include additional identity and raw/readable fields useful to clients.
 | `create_note_item` | Mutation | `track_index: int`, `start_measure: int`, `duration_measures: int`, `text: str` | Create an empty item with `P_NOTES`, no take/source, exact measure boundaries, and no overlap. | New item GUID/index, text, requested measures, seconds, and verified success. | `{"track_index": 9, "start_measure": 3, "duration_measures": 2, "text": "Am7"}` |
 | `create_midi_item` | Mutation | `track_index: int`, `start_measure: int`, exclusive `end_measure: int`, `notes: list[object]` | Create a non-overlapping MIDI item after validating every note through the same legacy-or-bar/beat/offset contract used by replacement. | New item/take identity, boundaries, created note read-back, and success. | `{"track_index": 9, "start_measure": 3, "end_measure": 5, "notes": [{"pitch": 60, "bar": 1, "beat": 1, "offset": 0, "duration_beats": 1, "velocity": 100}]}` |
 | `replace_midi_item_content` | Mutation | `track_index: int`, `item_guid: str`, `notes: list[object]` | Bulk-replace every MIDI event using either the legacy note shape or bar/beat/offset positions; validate first and roll back after unexpected post-clear failure. Empty `notes` intentionally clears the take. | Stable item/take identity, previous counts, normalized replacement notes, boundaries, and verified success. | `{"track_index": 9, "item_guid": "{ITEM-GUID}", "notes": []}` |
+| `replace_drum_item_content` | Mutation | `track_index: int`, `item_guid: str`, `mapping_id: str`, `events: list[object]` | Resolve explicitly selected Krimh drum semantics, then delegate one numeric-pitch bulk replacement to `replace_midi_item_content`. | Generic MIDI read-back plus mapping identity and semantic resolution metadata. | `{"track_index": 1, "item_guid": "{ITEM-GUID}", "mapping_id": "krimh-drums", "events": [{"bar": 1, "beat": 1, "offset": 0, "duration_beats": 0.25, "drum": "kick", "articulation": "main", "velocity": 105}]}` |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -255,6 +256,22 @@ normalize positions to `start_measure`, `start_beat`, and `duration_qn`.
   ]
 }
 ```
+
+### Resolve Krimh drum semantics
+
+`replace_drum_item_content` is the narrow drum-generation layer above the
+generic MIDI bridge. It requires the explicit mapping id `krimh-drums`; Kontakt
+FX and preset metadata are not treated as proof that Krimh Drums is loaded.
+Each event combines `drum` and `articulation`, such as `kick` + `main` or
+`crash.1` + `left-hit`, before passing only the resolved numeric pitch and
+musical timing fields to `replace_midi_item_content`.
+
+The verified declarative mapping is stored in
+`src/reaper_mcp/mappings/krimh-drums.json`. Primary `note` values are Krimh
+`Note 1`. Where Krimh also supplies `Note 2`, it remains available in
+`alternate_notes`; the resolver uses `Note 1` by default. Unknown mappings,
+unknown articulations, and invalid mapping data are explicit errors. There is
+no General MIDI fallback or Kontakt-based automatic detection.
 
 ## End-to-end examples
 
