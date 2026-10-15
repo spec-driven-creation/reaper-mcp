@@ -2957,126 +2957,144 @@ def handle_set_track_solo(request):
         "success": applied_solo == solo
     }
 
-def handle_create_note_item(request):
-    context, error = resolve_track(request)
+def get_active_project_identity():
+    project, _, path, _ = RPR_EnumProjects(-1, "", 32768)
+    name = RPR_GetSetProjectInfo_String(project, "PROJECT_NAME", "", False)[3]
+    return project, {"project_id": str(project), "project_path": path,
+                     "project_name": name}
 
-    if error is not None:
-        return error
 
+def resolve_note_item_range(request):
     start_measure = request.get("start_measure")
     duration_measures = request.get("duration_measures")
+    start_seconds = request.get("start_seconds")
+    duration_seconds = request.get("duration_seconds")
+    measures = start_measure is not None or duration_measures is not None
+    seconds = start_seconds is not None or duration_seconds is not None
+    if measures == seconds:
+        return None, {"error": "Specify exactly one complete timing pair: start_measure/duration_measures or start_seconds/duration_seconds; do not mix modes"}
+    if measures:
+        if type(start_measure) is not int or start_measure < 1:
+            return None, {"error": "start_measure must be a 1-based positive integer"}
+        if type(duration_measures) is not int or duration_measures < 1:
+            return None, {"error": "duration_measures must be a positive integer"}
+        if start_measure + duration_measures > 2147483647:
+            return None, {"error": "Measure end exceeds REAPER's supported integer range"}
+        start_seconds = get_measure_boundary(start_measure)
+        end_seconds = get_measure_boundary(start_measure + duration_measures)
+        duration_seconds = end_seconds - start_seconds
+    else:
+        for name, value in (("start_seconds", start_seconds),
+                            ("duration_seconds", duration_seconds)):
+            try:
+                valid = type(value) in (int, float) and math.isfinite(value)
+            except OverflowError:
+                valid = False
+            if not valid:
+                return None, {"error": f"{name} must be a finite number; both seconds fields are required"}
+        start_seconds, duration_seconds = float(start_seconds), float(duration_seconds)
+        end_seconds = start_seconds + duration_seconds
+    if (not math.isfinite(start_seconds) or not math.isfinite(duration_seconds)
+            or not math.isfinite(end_seconds) or start_seconds < 0
+            or duration_seconds <= 0 or end_seconds <= start_seconds):
+        return None, {"error": "Timing must have finite start >= 0, duration > 0 and a representable end after start"}
+    return {"timing_mode": "measures" if measures else "seconds",
+            "start_measure": start_measure, "duration_measures": duration_measures,
+            "end_measure": start_measure + duration_measures if measures else None,
+            "position_seconds": start_seconds, "start_seconds": start_seconds,
+            "duration_seconds": duration_seconds, "end_seconds": end_seconds}, None
+
+
+def handle_create_note_item(request):
+    project, project_identity = get_active_project_identity()
+    context, error = resolve_recording_track(request)
+    if error is not None:
+        return {**project_identity, **error}
+    identity = {**project_identity, **recording_identity(context)}
+    requested, error = resolve_note_item_range(request)
+    if error is not None:
+        return {**identity, **error}
     text = request.get("text")
-
-    if (
-        not isinstance(start_measure, int)
-        or isinstance(start_measure, bool)
-        or start_measure < 1
-    ):
-        return {"error": "start_measure must be a 1-based positive integer"}
-
-    if (
-        not isinstance(duration_measures, int)
-        or isinstance(duration_measures, bool)
-        or duration_measures < 1
-    ):
-        return {"error": "duration_measures must be a positive integer"}
-
-    if not isinstance(text, str) or not text.strip():
-        return {"error": "text must be a non-empty string"}
-
-    position_seconds = get_measure_boundary(start_measure)
-    end_seconds = get_measure_boundary(
-        start_measure + duration_measures
-    )
-    duration_seconds = end_seconds - position_seconds
-
-    if (
-        not math.isfinite(position_seconds)
-        or not math.isfinite(end_seconds)
-        or duration_seconds <= 0.0
-    ):
-        return {
-            "error": "REAPER returned invalid measure boundary positions"
-        }
-
+    if not isinstance(text, str) or not text.strip() or "\x00" in text:
+        return {**identity, "error": "text must be a non-empty string without NUL characters"}
     conflicts = get_item_conflicts(
-        context["track"], position_seconds, end_seconds
+        context["track"], requested["position_seconds"], requested["end_seconds"]
     )
-
     if conflicts:
-        return {
-            "error": "item_overlap",
-            "requested_range": {
-                "start_measure": start_measure,
-                "end_measure": start_measure + duration_measures,
-                "duration_measures": duration_measures,
-                "position_seconds": position_seconds,
-                "end_seconds": end_seconds,
-                "duration_seconds": duration_seconds
-            },
-            "conflicts": conflicts
-        }
+        return {**identity, "error": "item_overlap", "requested_range": requested,
+                "conflicts": conflicts}
+    item, item_guid = None, None
+    RPR_Undo_BeginBlock2(project)
+    try:
+        item = RPR_AddMediaItemToTrack(context["track"])
+        if not RPR_ValidatePtr2(project, item, "MediaItem*"):
+            item = None
+            raise RuntimeError("REAPER failed to create the media item")
+        item_guid = get_item_identity(item)
+        position_written = RPR_SetMediaItemInfo_Value(item, "D_POSITION", requested["position_seconds"])
+        length_written = RPR_SetMediaItemInfo_Value(item, "D_LENGTH", requested["duration_seconds"])
+        notes_written = RPR_GetSetMediaItemInfo_String(item, "P_NOTES", text, True)[0]
+        if not position_written or not length_written or not notes_written:
+            raise RuntimeError("REAPER failed to initialize the note item")
+        item_index = find_item_index(context["track"], item_guid)
+        applied_position = RPR_GetMediaItemInfo_Value(item, "D_POSITION")
+        applied_duration = RPR_GetMediaItemInfo_Value(item, "D_LENGTH")
+        notes_info = RPR_GetSetMediaItemInfo_String(item, "P_NOTES", "", False)
+        take_count = RPR_CountTakes(item)
+        if (item_index is None or not item_guid or not notes_info[0]
+                or notes_info[3] != text or take_count != 0
+                or not math.isfinite(applied_position) or applied_position < 0
+                or not math.isfinite(applied_duration) or applied_duration <= 0
+                or not math.isfinite(applied_position + applied_duration)
+                or applied_position + applied_duration <= applied_position
+                or not math.isclose(applied_position, requested["position_seconds"], rel_tol=0, abs_tol=1e-9)
+                or not math.isclose(applied_duration, requested["duration_seconds"], rel_tol=0, abs_tol=1e-9)):
+            raise RuntimeError("Note item read-back verification failed")
+        return {**identity, **requested, "item_index": item_index, "item_guid": item_guid,
+                "text": notes_info[3], "position_seconds": applied_position,
+                "start_seconds": applied_position, "duration_seconds": applied_duration,
+                "end_seconds": applied_position + applied_duration,
+                "take_count": take_count, "success": True}
+    except Exception as error:
+        rollback_succeeded = None
+        if item is not None:
+            try:
+                rollback_succeeded = delete_created_item(context["track"], item, item_guid)
+            except Exception:
+                rollback_succeeded = False
+        return {**identity, "error": str(error), "rollback_succeeded": rollback_succeeded}
+    finally:
+        RPR_Undo_EndBlock2(project, "Create note item", 4)
+        RPR_UpdateArrange()
 
-    item = RPR_AddMediaItemToTrack(context["track"])
 
-    if not item:
-        return {"error": "REAPER failed to create the media item"}
-
-    position_written = RPR_SetMediaItemInfo_Value(
-        item, "D_POSITION", position_seconds
-    )
-    length_written = RPR_SetMediaItemInfo_Value(
-        item, "D_LENGTH", duration_seconds
-    )
-    notes_written = RPR_GetSetMediaItemInfo_String(
-        item, "P_NOTES", text, True
-    )[0]
-    RPR_UpdateArrange()
-
-    if not position_written or not length_written or not notes_written:
-        return {"error": "REAPER failed to initialize the note item"}
-
-    item_guid = get_item_identity(item)
-    item_index = find_item_index(context["track"], item_guid)
-
-    applied_position = RPR_GetMediaItemInfo_Value(item, "D_POSITION")
-    applied_duration = RPR_GetMediaItemInfo_Value(item, "D_LENGTH")
-    applied_end = applied_position + applied_duration
-    notes_info = RPR_GetSetMediaItemInfo_String(
-        item, "P_NOTES", "", False
-    )
-    applied_text = notes_info[3]
-    take_count = RPR_CountTakes(item)
-    success = (
-        item_index is not None
-        and bool(item_guid)
-        and bool(notes_info[0])
-        and applied_text == text
-        and take_count == 0
-        and math.isclose(
-            applied_position, position_seconds,
-            rel_tol=1e-9, abs_tol=1e-9
-        )
-        and math.isclose(
-            applied_duration, duration_seconds,
-            rel_tol=1e-9, abs_tol=1e-9
-        )
-    )
-
-    return {
-        "track_index": context["track_index"],
-        "track_name": context["track_name"],
-        "item_index": item_index,
-        "item_guid": item_guid,
-        "text": applied_text,
-        "start_measure": start_measure,
-        "duration_measures": duration_measures,
-        "position_seconds": applied_position,
-        "end_seconds": applied_end,
-        "duration_seconds": applied_duration,
-        "take_count": take_count,
-        "success": success
-    }
+def handle_delete_item(request):
+    project, project_identity = get_active_project_identity()
+    context, error = resolve_item_by_guid(request)
+    if error is not None:
+        return {**project_identity, **error}
+    track, item = context["track"], context["item"]
+    if (not RPR_ValidatePtr2(project, track, "MediaTrack*")
+            or not RPR_ValidatePtr2(project, item, "MediaItem*")
+            or RPR_GetMediaItem_Track(item) != track):
+        return {**project_identity, "error": "Item or track is invalid or item does not belong to the requested track"}
+    identity = {**project_identity, "track_index": context["track_index"],
+                "track_name": context["track_name"], "track_guid": recording_track_guid(track)}
+    before_count = RPR_CountTrackMediaItems(track)
+    RPR_Undo_BeginBlock2(project)
+    try:
+        deleted = RPR_DeleteTrackMediaItem(track, item)
+        absent = find_item_by_guid(track, context["item_guid"]) is None
+        if not deleted or not absent or RPR_CountTrackMediaItems(track) != before_count - 1:
+            return {**identity, "error": "Item deletion read-back verification failed",
+                    "item_guid": context["item_guid"], "item_absent": absent}
+        return {**identity, "success": True, "item_guid": context["item_guid"],
+                "deleted_item_guid": context["item_guid"]}
+    except Exception as error:
+        return {**identity, "error": str(error), "item_guid": context["item_guid"]}
+    finally:
+        RPR_Undo_EndBlock2(project, "Delete item by GUID", 4)
+        RPR_UpdateArrange()
 
 def handle_set_item_end_measure(request):
     context, error = resolve_item_by_guid(request)
@@ -4477,6 +4495,7 @@ COMMAND_HANDLERS = {
     "set_track_record_arm": handle_set_track_record_arm,
     "set_track_solo": handle_set_track_solo,
     "create_note_item": handle_create_note_item,
+    "delete_item": handle_delete_item,
     "set_item_end_measure": handle_set_item_end_measure,
     "create_click_source_item": handle_create_click_source_item,
     "create_midi_item": handle_create_midi_item,

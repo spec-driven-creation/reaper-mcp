@@ -842,18 +842,24 @@
       "id": "WR-007",
       "category": "mutation",
       "title": "Create note item",
-      "status": "completed",
+      "status": "testing",
       "priority": "medium",
       "capability": "create_note_item",
-      "description": "Create an empty media item with human-readable notes on one validated track using musical measure boundaries.",
-      "depends_on": ["RO-012"],
+      "description": "Create a verified take-less text item using exactly one complete seconds or measure timing pair, preserving existing items and project context.",
+      "depends_on": [
+        "RO-012"
+      ],
       "acceptance_criteria": [
-        "Validate the one-based track and start measure, positive measure duration, and non-blank note text before mutation.",
+        "Validate the one-based track, non-blank note text and one complete timing pair before mutation; validate positive integer measures only in measure mode.",
         "Resolve exact start and end measure boundaries through REAPER time-map APIs.",
         "Create an empty MediaItem with the requested P_NOTES text and no take or source.",
         "Report success only after item identity, position, length, take count, and notes read-back are valid.",
         "Reject overlap with any existing MediaItem on the target track without modifying existing items.",
-        "Allow adjacent items whose ranges only touch at their boundaries."
+        "Allow adjacent items whose ranges only touch at their boundaries.",
+        "Support finite start_seconds >= 0 and duration_seconds > 0, including between-beat attacks, without rounding to musical boundaries.",
+        "Reject incomplete or mixed timing modes before mutation and retain the existing measure-based contract.",
+        "Return applied start/duration/end, item GUID, track identity and active project identity; remove partial creations on initialization or verification failure.",
+        "Group each creation in one Undo step, update the arrangement and preserve selection, cursor, transport, tempo and neighboring items."
       ],
       "bugs": []
     },
@@ -1321,6 +1327,25 @@
         "Reject unnamed projects without Save As or inventing a filename.",
         "Save the active named project and return identity/path with post-save dirty status.",
         "Report failure when the active identity/path changes or modifications remain after saving."
+      ],
+      "bugs": []
+    },
+    {
+      "id": "WR-027",
+      "category": "mutation",
+      "title": "Delete one item by GUID",
+      "status": "testing",
+      "priority": "high",
+      "capability": "delete_item",
+      "description": "Delete exactly one GUID-identified item from an explicit track in the active project, with Undo and read-back verification.",
+      "depends_on": [
+        "RO-003"
+      ],
+      "acceptance_criteria": [
+        "Resolve a non-blank item GUID on the explicit valid track; reject missing GUIDs or track mismatches without changing any item.",
+        "Delete only the resolved item, verify GUID absence and return the deleted GUID, track identity and active project identity.",
+        "Use one Undo step and update the arrangement without changing selection of surviving items, cursor, transport, tempo or neighboring items.",
+        "Validate seconds creation at 0, 1.5, 3 and 4.5 seconds, legacy measures, failures, deletion and real host Undo in an isolated temporary project."
       ],
       "bugs": []
     }

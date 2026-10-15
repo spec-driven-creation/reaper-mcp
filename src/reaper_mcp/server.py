@@ -428,18 +428,27 @@ def set_track_solo(track_index: int, solo: bool) -> dict:
 @mcp.tool()
 def create_note_item(
     track_index: int,
-    start_measure: int,
-    duration_measures: int,
-    text: str
+    start_measure: int | None = None,
+    duration_measures: int | None = None,
+    text: str = "",
+    start_seconds: float | None = None,
+    duration_seconds: float | None = None
 ) -> dict:
-    """Create an empty item with notes at exact measure boundaries."""
+    """Create a take-less text item using exactly one complete seconds or measures pair; non-blank text required."""
     return send_reaper_command(
         "create_note_item",
         track_index=track_index,
         start_measure=start_measure,
         duration_measures=duration_measures,
-        text=text
+        text=text,
+        start_seconds=start_seconds,
+        duration_seconds=duration_seconds
     )
+
+@mcp.tool()
+def delete_item(track_index: int, item_guid: str) -> dict:
+    """Delete exactly one GUID-identified item from the explicit track, with Undo and verification."""
+    return send_reaper_command("delete_item", track_index=track_index, item_guid=item_guid)
 
 @mcp.tool()
 def set_item_end_measure(

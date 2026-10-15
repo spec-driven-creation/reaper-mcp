@@ -281,7 +281,8 @@ most include additional identity and raw/readable fields useful to clients.
 | `set_track_mute` | Mutation | `track_index: int`, `muted: bool` | Set mute on one validated track. | Requested and applied mute state. | `{"track_index": 2, "muted": true}` |
 | `set_track_record_arm` | Mutation | `track_index: int`, `armed: bool` | Arm or disarm one validated track for recording without changing its input, monitoring, or other tracks. | Requested and applied record-arm state. | `{"track_index": 10, "armed": true}` |
 | `set_track_solo` | Mutation | `track_index: int`, `solo: bool` | Set normal solo state on one validated track. | Requested and applied solo state. | `{"track_index": 2, "solo": true}` |
-| `create_note_item` | Mutation | `track_index: int`, `start_measure: int`, `duration_measures: int`, `text: str` | Create an empty item with `P_NOTES`, no take/source, exact measure boundaries, and no overlap. | New item GUID/index, text, requested measures, seconds, and verified success. | `{"track_index": 9, "start_measure": 3, "duration_measures": 2, "text": "Am7"}` |
+| `create_note_item` | Mutation | `track_index: int`, non-blank `text: str`, exactly one complete pair: `start_measure: int` + `duration_measures: int` OR `start_seconds: float` + `duration_seconds: float` | Create an empty item with `P_NOTES`, no take/source, verified exact timing and no overlap; one Undo step. | Project/track identity, item GUID/index, text, applied start/duration/end seconds, timing mode, requested measures and success. | `{"track_index": 9, "start_seconds": 1.5, "duration_seconds": 1.0, "text": "C4"}` |
+| `delete_item` | Mutation | `track_index: int`, `item_guid: str` | Delete only the GUID-identified item belonging to the explicit track; one Undo step. Reject missing or wrong-track GUIDs before mutation. | Project/track identity, `item_guid`, `deleted_item_guid`, verified success. | `{"track_index": 9, "item_guid": "{ITEM-GUID}"}` |
 | `set_item_end_measure` | Mutation | `track_index: int`, `item_guid: str`, exclusive `end_measure: int` | Resize one item to an exact measure boundary without moving its start; reject overlap with other items. | Previous and applied item state plus verified success. | `{"track_index": 2, "item_guid": "{ITEM-GUID}", "end_measure": 47}` |
 | `create_click_source_item` | Mutation | `track_index: int`, `start_measure: int`, exclusive `end_measure: int` | Create a non-overlapping native REAPER `CLICK` source item at exact measure boundaries. | Item/take identity, source type, applied boundaries, and verified success. | `{"track_index": 2, "start_measure": 41, "end_measure": 47}` |
 | `create_midi_item` | Mutation | `track_index: int`, `start_measure: int`, exclusive `end_measure: int`, `notes: list[object]` | Create a non-overlapping MIDI item after validating every note through the same legacy-or-bar/beat/offset contract used by replacement. | New item/take identity, boundaries, created note read-back, and success. | `{"track_index": 9, "start_measure": 3, "end_measure": 5, "notes": [{"pitch": 60, "bar": 1, "beat": 1, "offset": 0, "duration_beats": 1, "velocity": 100}]}` |
@@ -320,10 +321,73 @@ Use exactly one of `note_name` or `pitch` in each note. `duration_qn` is in
 quarter-note units. Notes sharing a start position form a chord; gaps and
 overlaps are allowed. REAPER time-map and MIDI PPQ conversion remain internal.
 
-### Create a text note item
+### Create and delete text note items
 
 `create_note_item` creates an empty MediaItem with text stored in `P_NOTES`.
 It creates no audio/MIDI take and rejects blank text or an occupied time range.
+Text is preserved exactly, including whitespace around non-blank content; NUL
+characters are rejected. Provide exactly one complete timing pair:
+
+- `start_measure` (one-based positive integer) and `duration_measures` (positive
+  integer). Both boundaries come from the project's actual tempo map. Existing
+  named calls and Python positional calls `(track_index, start_measure,
+  duration_measures, text)` remain compatible.
+  The exclusive end measure must fit REAPER's integer range (<= 2147483647).
+- `start_seconds` (finite number >= 0) and `duration_seconds` (finite number > 0).
+  These are absolute project seconds, without beat/measure quantization. Their
+  sum must be finite and represent an end strictly after the start.
+
+Null timing fields are treated as absent. Incomplete pairs, mixed modes,
+booleans, invalid numbers and overlap are rejected before creating an item.
+Adjacent ranges that only touch are allowed. If creation or read-back fails,
+the bridge removes the partially created item and reports `rollback_succeeded`.
+
+For example, these calls create four one-second text items, including attacks
+between beats:
+
+```text
+create_note_item(track_index=9, text="C4", start_seconds=0, duration_seconds=1)
+create_note_item(track_index=9, text="C#4", start_seconds=1.5, duration_seconds=1)
+create_note_item(track_index=9, text="D4", start_seconds=3, duration_seconds=1)
+create_note_item(track_index=9, text="D#4", start_seconds=4.5, duration_seconds=1)
+```
+
+To label a MIDI note on an existing `Notes` track, use that note's
+`position_seconds`, `duration_seconds` and `note_name` from `get_midi_notes`.
+Read and explicitly identify the destination track first. The creation tool
+does not create tracks or derive note timing itself. Simultaneous or overlapping
+MIDI notes require separate destination tracks or a combined label, because
+text-item overlap is intentionally rejected.
+
+`create_note_item` returns applied `start_seconds` (also available as the
+backward-compatible `position_seconds`), `duration_seconds`, `end_seconds`,
+`text`, `take_count: 0`, `item_guid`, and a diagnostic `item_index`. It also
+returns `timing_mode` plus the requested measure fields (null for seconds mode).
+Timing read-back uses an absolute tolerance of 1e-9 seconds, without rounding
+the applied values returned to the caller.
+
+`delete_item(track_index=9, item_guid="{GUID-FROM-CREATION}")` resolves the item
+only by GUID within the active project. It accepts any media-item type, including
+empty, MIDI and audio items. It never uses selection or an item index. Missing
+GUIDs return `item_guid_not_found`; a GUID on another track returns
+`item_track_mismatch` with the actual track index. Success requires both native
+deletion and verification that the GUID disappeared and the track count dropped
+by exactly one. A failed deletion/read-back returns an error, not success.
+
+Both tools return `project_id` (session-local REAPER project handle),
+`project_path` (empty for an unnamed project), `project_name`, `track_index`,
+`track_name` and the stable `track_guid`. Deletion also returns
+`deleted_item_guid`. Both operate on the active project, update the arrangement
+and create an individual item-only Undo step. They do not change cursor,
+transport, tempo, track selection, neighboring items or their selection.
+Deleting a selected target necessarily removes that item from the selection.
+
+Run `scripts/validate_note_items_in_reaper.lua` only in a new isolated REAPER
+instance whose `-cfgfile` is `.local/note-item-validation/reaper.ini`. Its guarded
+Python probe refuses a work session, checks real Undo/Redo and context/item
+preservation, and writes its report and temporary project in that directory.
+After deployment, restart the bridge ReaScript to load its new handlers and
+reconnect the MCP client to refresh the changed/new tool definitions.
 
 ### Resize and create click-source items
 
