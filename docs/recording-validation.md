@@ -1,8 +1,9 @@
 # Recording preparation validation — 2026-10-15
 
 The user accepted capability tasks RO-027 and WR-022 through WR-026 on
-2026-10-15; their backlog status is `completed`. BUG-016 remains open as a
-documented limitation. FiruletMap was not modified.
+2026-10-15; their backlog status is `completed`. The user explicitly closed
+BUG-016 on the same date as an accepted limitation (`wont-fix`), without a code
+change. FiruletMap was not modified.
 
 ## Automated evidence
 

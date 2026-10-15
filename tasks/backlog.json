@@ -1271,8 +1271,8 @@
         },
         {
           "id": "BUG-016",
-          "description": "Newly inserted plugins such as bx_tuner/ReaSynth can name an initially unnamed preset while native-copying, changing serialized metadata. The conservative full-state verification rejects this case and rolls back; explicit preset chains passed host acceptance.",
-          "status": "open",
+          "description": "Newly inserted plugins such as bx_tuner/ReaSynth can name an initially unnamed preset while native-copying, changing serialized metadata. The conservative full-state verification rejects this case and rolls back; explicit preset chains passed host acceptance. Closed by explicit user decision on 2026-10-15 as an accepted limitation, without a code fix.",
+          "status": "wont-fix",
           "discovered_during": "runtime-validation"
         }
       ]
