@@ -5,6 +5,7 @@ import json
 import math
 import re
 import uuid
+import base64
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -4208,8 +4209,8 @@ def handle_set_track_color(request):
         if error:
             return error
         raw = read_track_color(source["track"])["color_raw"]
-    if type(raw) is not int or not (raw == 0 or 0x1000000 <= raw <= 0x1ffffff):
-        return {"error": "color_raw must be 0 (default) or a native custom color with 0x1000000 set"}
+    if type(raw) is not int or not 0 <= raw <= 0x1ffffff:
+        return {"error": "color_raw must be a native color integer from 0 to 0x1ffffff; the custom flag is preserved, never added"}
     result = write_recording_value(context, "I_CUSTOMCOLOR", raw, "Set track color")
     if result.get("success"):
         result.update(read_track_color(context["track"]))
@@ -4344,15 +4345,102 @@ def portable_fx_chunk(chunk):
     return "".join(output)
 
 
-def comparable_fx_chunk(chunk):
-    # Only generated instance identity and window placement are irrelevant to sound.
-    return "\n".join(line.strip() for line in chunk.splitlines()
-                     if not line.strip().startswith(("FXID ", "FLOATPOS ", "SHOW ", "LASTSEL ")))
+def comparable_fx_chunk(chunk, ignore_instance_identity=True):
+    # Only FXCHAIN-level identity/window records are non-musical. In particular,
+    # FLOAT is an open floating editor rectangle; native copy emits FLOATPOS 0s.
+    # Never strip matching text (or whitespace) inside opaque VST/JS/etc state.
+    output, depth = [], 0
+    for line in chunk.splitlines():
+        text = line.strip()
+        window_record = re.fullmatch(r"(?:FLOAT|FLOATPOS) -?\d+ -?\d+ -?\d+ -?\d+", text)
+        selection_record = re.fullmatch(r"(?:SHOW|LASTSEL) -?\d+", text)
+        identity_record = ignore_instance_identity and text.startswith("FXID ")
+        if not (depth == 1 and (window_record or selection_record or identity_record)):
+            output.append(line)
+        if text.startswith("<"):
+            depth += 1
+        elif text == ">":
+            depth -= 1
+    return "\n".join(output)
 
 
 def comparable_recording_source(chunk):
-    return "\n".join(line for line in chunk.splitlines()
-                     if not line.strip().startswith(("FLOATPOS ", "SHOW ", "LASTSEL ")))
+    span = chunk_block_span(chunk, "FXCHAIN")
+    if span is None:
+        return chunk
+    return chunk[:span[0]] + comparable_fx_chunk(chunk[slice(*span)], False) + chunk[span[1]:]
+
+
+def vst2_label_lines(lines):
+    candidates, depth, fx_index, vst = {}, 0, -1, None
+    for index, line in enumerate(lines):
+        text = line.strip()
+        if depth == 1 and text.startswith("BYPASS "):
+            fx_index += 1
+        if depth == 1 and text.startswith('<VST "') and not text.startswith('<VST "VST3:'):
+            vst = fx_index
+        if depth == 2 and text == ">" and vst is not None:
+            candidates[index - 1] = vst
+            vst = None
+        if text.startswith("<"):
+            depth += 1
+        elif text == ">":
+            depth -= 1
+    return candidates
+
+
+def read_vst_copy_state(track, index):
+    blob = RPR_TrackFX_GetNamedConfigParm(track, index, "vst_chunk", "", 4 * 1024 * 1024)
+    if not blob[0] or not blob[4] or len(blob[4].encode("utf-8")) >= 4 * 1024 * 1024 - 1:
+        return None
+    io = RPR_TrackFX_GetIOSize(track, index, 0, 0)
+    pins = []
+    for direction, count in ((0, io[3]), (1, io[4])):
+        for pin in range(count):
+            for bank in (0, 0x1000000):
+                mapping = RPR_TrackFX_GetPinMappings(track, index, direction, pin | bank, 0)
+                pins.append((mapping[0] & 0xffffffff, mapping[5] & 0xffffffff))
+    wet = RPR_TrackFX_GetParamFromIdent(track, index, ":wet")
+    preset = RPR_TrackFX_GetPreset(track, index, "", 512)
+    return {"vst_chunk": blob[4], "io": io[3:5], "pins": pins,
+            "preset": (bool(preset[0]), preset[3], RPR_TrackFX_GetPresetIndex(track, index, 0)[0]),
+            "enabled": bool(RPR_TrackFX_GetEnabled(track, index)),
+            "offline": bool(RPR_TrackFX_GetOffline(track, index)),
+            "parameters": [RPR_TrackFX_GetParamNormalized(track, index, p) for p in range(RPR_TrackFX_GetNumParams(track, index))],
+            "wet": RPR_TrackFX_GetParamNormalized(track, index, wet) if wet >= 0 else None}
+
+
+def verify_copied_fx_state(src, dst, source_fx, destination_fx):
+    source = comparable_fx_chunk(source_fx).splitlines()
+    destination = comparable_fx_chunk(destination_fx).splitlines()
+    if source == destination:
+        return True, []
+    if len(source) != len(destination):
+        return False, []
+    source_labels, destination_labels = vst2_label_lines(source), vst2_label_lines(destination)
+    normalized = set()
+    for index, (before, after) in enumerate(zip(source, destination)):
+        if before == after:
+            continue
+        effect = source_labels.get(index)
+        if effect is None or effect < 0 or destination_labels.get(index) != effect or before != "AAAAAAAA":
+            return False, []
+        try:
+            trailer = base64.b64decode(after, validate=True)
+            # Observed REAPER VST2 wrapper label: zero byte, UTF-8 name, five zeros.
+            # Only empty -> populated labels are candidates; named presets stay strict.
+            if not 7 <= len(trailer) <= 262 or trailer[:1] != b"\0" or trailer[-5:] != b"\0" * 5:
+                return False, []
+            label = trailer[1:-5].decode("utf-8")
+            if not label or not label.isprintable():
+                return False, []
+        except (ValueError, UnicodeError):
+            return False, []
+        source_state = read_vst_copy_state(src, effect)
+        if source_state is None or source_state != read_vst_copy_state(dst, effect):
+            return False, []
+        normalized.add(effect + 1)
+    return True, sorted(normalized)
 
 
 def handle_copy_track_fx_chain(request):
@@ -4390,10 +4478,11 @@ def handle_copy_track_fx_chain(request):
             if RPR_TrackFX_GetCount(dst) != index + 1:
                 raise RuntimeError(f"REAPER failed to copy FX {index + 1}")
         applied = read_recording_chunk(dst)
+        fx_verified, normalized_labels = verify_copied_fx_state(src, dst, fx, recording_fx_chunk(applied))
         verification = {
             "identity": recording_track_guid(dst) == destination["track_guid"],
             "fx_count": RPR_TrackFX_GetCount(dst) == source_count,
-            "fx_state": comparable_fx_chunk(recording_fx_chunk(applied)) == comparable_fx_chunk(fx),
+            "fx_state": fx_verified,
             "channels": int(RPR_GetMediaTrackInfo_Value(dst, "I_NCHAN")) == channels,
             "source_unchanged": comparable_recording_source(read_recording_chunk(src)) == comparable_recording_source(source_before),
         }
@@ -4407,7 +4496,8 @@ def handle_copy_track_fx_chain(request):
             raise RuntimeError("Non-FX destination state changed")
         return {"success": True, **recording_identity(destination),
                 "source": recording_identity(source), "fx_count": RPR_TrackFX_GetCount(dst),
-                "channels": channels, "verified_full_state": True}
+                "channels": channels, "verified_full_state": True,
+                "normalized_vst_program_labels": normalized_labels}
     except Exception as error:
         try:
             for index in reversed(range(RPR_TrackFX_GetCount(dst))):

@@ -1239,7 +1239,7 @@
       "id": "WR-022",
       "category": "mutation",
       "title": "Set or replicate exact track color",
-      "status": "completed",
+      "status": "testing",
       "priority": "high",
       "capability": "set_track_color",
       "description": "Set or replicate exact track color",
@@ -1250,13 +1250,21 @@
         "Set native color or copy source color, including theme default and custom black.",
         "Validate pointer/GUID and exclusive inputs before writing; verify applied color in an undo step."
       ],
-      "bugs": []
+      "bugs": [
+        {
+          "id": "BUG-018",
+          "description": "Copying a default color with custom=false and raw I_CUSTOMCOLOR=16576 is rejected because the setter requires the custom flag. Preserve default-color behavior when copying without making it a custom color.",
+          "status": "open",
+          "discovered_during": "runtime-validation",
+          "validation_notes": "Correction implemented and host-validated: copy raw 16576 exactly with custom=false; never force the custom flag. Awaiting explicit human acceptance; see docs/fx-copy-regression.md."
+        }
+      ]
     },
     {
       "id": "WR-023",
       "category": "mutation",
       "title": "Copy complete FX state into empty destination with verification and rollback",
-      "status": "completed",
+      "status": "testing",
       "priority": "high",
       "capability": "copy_track_fx_chain",
       "description": "Copy complete FX state into empty destination with verification and rollback",
@@ -1280,6 +1288,13 @@
           "description": "Newly inserted plugins such as bx_tuner/ReaSynth can name an initially unnamed preset while native-copying, changing serialized metadata. The conservative full-state verification rejects this case and rolls back; explicit preset chains passed host acceptance. Closed by explicit user decision on 2026-10-15 as an accepted limitation, without a code fix.",
           "status": "wont-fix",
           "discovered_during": "runtime-validation"
+        },
+        {
+          "id": "BUG-017",
+          "description": "Real FM-003 to FM-004 GTune/Ampknob and Sketch Piano/GTune chains fail full serialized FX verification with fx_state=false and successful rollback. Reproduce precise native-copy differences before rollback and accept only proven non-sonic metadata while retaining strict musical-state verification.",
+          "status": "open",
+          "discovered_during": "runtime-validation",
+          "validation_notes": "Correction implemented and validated in both captured chains, the original live Sketch Piano snapshot, injected sonic/partial failures and guarded FiruletMap completion. FLOAT rectangles are scoped UI metadata; the empty VST2 wrapper label is accepted only with unchanged serialized remainder and exact native chunk and musical API state. Awaiting explicit human acceptance; see docs/fx-copy-regression.md."
         }
       ]
     },

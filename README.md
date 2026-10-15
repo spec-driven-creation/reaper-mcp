@@ -120,9 +120,11 @@ the applied state. They do not arm recording.
 
 <!-- markdownlint-enable MD013 -->
 
-Color `0` means the theme default (`custom: false`, `rgb: null`); custom native
-colors include REAPER's `0x1000000` flag. Copy from a source to preserve the exact
-native color across tracks, including default versus custom black.
+Native colors without REAPER's `0x1000000` flag use the theme default
+(`custom: false`, `rgb: null`), including raw `0` and stored RGB values such as
+`16576`. The setter preserves the raw integer and custom flag exactly; it never
+adds the flag. Valid raw colors range from `0` to `0x1ffffff`. Copy from a source
+to preserve default behavior, custom black, or an exact custom native color.
 
 FX copying uses `TrackFX_CopyToTrack` with full serialized state verification,
 including opaque
@@ -134,16 +136,28 @@ parameter links are rejected before mutation. Items, MIDI, automation, sends and
 other destination properties are preserved. Full FX state and non-FX destination
 state are compared after writing; a failed write or mismatch restores and checks
 the original destination snapshot (`rollback_succeeded` in errors). The source
-is never written. Only FX instance GUIDs and FX window/selection metadata are
-excluded from comparisons. REAPER can update the source FX window selection.
+is never written. Only chain-level FX instance GUIDs and recognized window or
+selection records (`FLOAT`, `FLOATPOS`, `SHOW`, `LASTSEL`) are excluded from
+comparisons. Matching text inside opaque plugin state remains byte-exact;
+unknown records and plugin-state whitespace remain significant. REAPER can
+update the source FX window selection.
+
+One observed VST2 wrapper normalization is allowed: an empty six-byte program
+label trailer becoming a populated UTF-8 label, with its remaining flag bytes
+unchanged. This is accepted only when every other serialized field matches and
+REAPER's native `vst_chunk`, preset API state, normalized parameters, bypass,
+offline, wet value, I/O sizes and pin mappings (both 64-channel banks) match
+exactly. Named labels changing, VST3 trailers, unavailable native chunks or any
+other difference still fail and trigger rollback. Successful responses include
+one-based `normalized_vst_program_labels` indices (usually an empty array).
+
 A conservative mismatch can reject plugins that reserialize their state
 differently, including newly inserted bx_tuner/ReaSynth instances whose unnamed
 initial preset gains a name on copy. The host probe uses explicit factory
 presets. A mismatch leaves the source unchanged and rolls back the destination;
 it does not silently normalize the source. Track snapshots are limited to 4 MiB;
-larger or
-unavailable chunks are rejected before writing. This is not an audio-equivalence
-or plugin-license check.
+larger or unavailable chunks are rejected before writing. This is not an
+audio-equivalence or plugin-license check.
 
 Recording input values preserve REAPER's raw encoding: `-1` is no input; mono
 inputs start at `0`; stereo pairs start at `1024` (first pair). Audio channels

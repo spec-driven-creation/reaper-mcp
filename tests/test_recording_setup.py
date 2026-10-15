@@ -2,6 +2,7 @@ import ast
 import re
 import unittest
 import uuid
+import base64
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +15,7 @@ BRIDGE = Path(__file__).parents[1] / "reaper/mcp_bridge.py"
 def load_functions(namespace):
     tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
     functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
-    namespace.update(re=re, uuid=uuid)
+    namespace.update(re=re, uuid=uuid, base64=base64)
     exec(compile(ast.Module(body=functions, type_ignores=[]), str(BRIDGE), "exec"), namespace)
     return namespace
 
@@ -95,6 +96,76 @@ class RecordingTests(unittest.TestCase):
         result = self.call("set_track_color", track_index=2, color_raw=0)
         self.assertFalse(result["custom"])
         self.assertIsNone(result["rgb"])
+
+    def test_default_color_with_stored_rgb_is_copied_without_custom_flag(self):
+        self.values[1]["I_CUSTOMCOLOR"] = 16576
+        result = self.call("set_track_color", track_index=2, source_track_index=1)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["color_raw"], 16576)
+        self.assertFalse(result["custom"])
+        self.assertIsNone(result["rgb"])
+        self.assertEqual(self.values[1]["I_CUSTOMCOLOR"], 16576)
+        self.assertEqual(self.values[2]["I_CUSTOMCOLOR"], 16576)
+        direct = self.call("set_track_color", track_index=2, color_raw=16576)
+        self.assertTrue(direct["success"])
+        self.assertFalse(direct["custom"])
+        black = self.call("set_track_color", track_index=2, color_raw=0x1000000)
+        self.assertTrue(black["custom"])
+        self.assertEqual(black["rgb"], [0, 0, 0])
+
+    def test_invalid_native_colors_never_write(self):
+        for raw in (-1, True, 0x2000000, "16576", 1.5):
+            self.assertIn("error", self.call("set_track_color", track_index=2, color_raw=raw))
+        self.assertEqual(self.writes, [])
+
+    def test_float_window_record_normalizes_only_at_chain_level(self):
+        source = '<FXCHAIN\nSHOW 1\nLASTSEL 0\nBYPASS 0 0 0\n<VST test\nopaque_state\n>\nFLOAT 5919 1047 322 360\nFXID {SRC}\nWAK 0 0\n>\n'
+        destination = source.replace('SHOW 1', 'SHOW -1').replace('LASTSEL 0', 'LASTSEL 1').replace('FLOAT 5919 1047 322 360', 'FLOATPOS 0 0 0 0').replace('{SRC}', '{DST}')
+        compare = self.n['comparable_fx_chunk']
+        self.assertEqual(compare(source), compare(destination))
+        self.assertNotEqual(compare(source, False), compare(destination, False))
+
+    def test_opaque_state_preset_bypass_wet_and_pins_remain_strict(self):
+        source = '<FXCHAIN\n<VST test\nSHOW 1\nFLOAT 1 2 3 4\nopaque_state\n>\nPRESETNAME "My preset"\nBYPASS 0 0 0\nWET 0.37\nPINMAP 1 4\n>\n'
+        compare = self.n['comparable_fx_chunk']
+        for old, new in (('SHOW 1', 'SHOW 2'), ('FLOAT 1 2 3 4', 'FLOAT 9 2 3 4'), ('opaque_state', 'sonic_change'), ('My preset', 'Other preset'), ('BYPASS 0', 'BYPASS 1'), ('0.37', '0.9'), ('PINMAP 1 4', 'PINMAP 1 8'), ('opaque_state', ' opaque_state')):
+            with self.subTest(change=(old, new)):
+                self.assertNotEqual(compare(source), compare(source.replace(old, new)))
+        self.assertNotEqual(compare(source), compare(source.replace('>\nPRESETNAME', '>\nUNKNOWN_STATE 42\nPRESETNAME')))
+
+    def test_source_comparison_preserves_instance_ids_and_non_fx_state(self):
+        source = '<TRACK\nNAME test\n<FXCHAIN\nFLOAT 1 2 3 4\nFXID {SRC}\n<VST test\nSHOW 1\n>\n>\n<ITEM\nFLOAT 1 2 3 4\n>\n>\n'
+        compare = self.n['comparable_recording_source']
+        self.assertEqual(compare(source), compare(source.replace('FLOAT 1 2 3 4', 'FLOATPOS 0 0 0 0', 1)))
+        self.assertNotEqual(compare(source), compare(source.replace('{SRC}', '{DST}')))
+        self.assertNotEqual(compare(source), compare(source.replace('SHOW 1', 'SHOW 2')))
+        self.assertNotEqual(compare(source), compare(source.replace('<ITEM\nFLOAT 1 2 3 4', '<ITEM\nFLOAT 9 2 3 4')))
+
+    def test_vst2_empty_program_label_requires_exact_native_state(self):
+        source = '<FXCHAIN\nBYPASS 0 0 0\n<VST "VSTi: Sketch Piano" plugin.dll\nopaque_state\nAAAAAAAA\n>\n>\n'
+        destination = source.replace('AAAAAAAA', base64.b64encode(b'\0Sketch Piano' + b'\0' * 5).decode())
+        verify = self.n['verify_copied_fx_state']
+        self.n['read_vst_copy_state'] = lambda *_: {'vst_chunk': 'exact opaque bytes', 'preset': ('', 0), 'pins': [1, 2], 'parameters': [0.37]}
+        self.assertEqual(verify(1, 2, source, destination), (True, [1]))
+        self.n['read_vst_copy_state'] = lambda track, _: {'vst_chunk': 'original' if track == 1 else 'corrupted'}
+        self.assertEqual(verify(1, 2, source, destination), (False, []))
+        self.n['read_vst_copy_state'] = lambda *_: None
+        self.assertEqual(verify(1, 2, source, destination), (False, []))
+        baseline = {'vst_chunk': 'exact', 'preset': ('chosen', 0), 'parameters': [0.37], 'pins': [1, 2], 'wet': 0.5, 'enabled': True, 'offline': False}
+        for field, altered in (('preset', ('other', 1)), ('parameters', [0.5]), ('pins', [1, 4]), ('wet', 0.7), ('enabled', False), ('offline', True)):
+            self.n['read_vst_copy_state'] = lambda track, _, field=field, altered=altered: baseline if track == 1 else {**baseline, field: altered}
+            self.assertEqual(verify(1, 2, source, destination), (False, []))
+
+    def test_vst2_label_rule_rejects_other_payload_changes_and_named_presets(self):
+        source = '<FXCHAIN\nBYPASS 0 0 0\n<VST "VSTi: Sketch Piano" plugin.dll\nopaque_state\nAAAAAAAA\n>\nPRESETNAME "chosen"\n>\n'
+        trailer = base64.b64encode(b'\0Sketch Piano' + b'\0' * 5).decode()
+        destination = source.replace('AAAAAAAA', trailer)
+        self.n['read_vst_copy_state'] = lambda *_: {'vst_chunk': 'exact'}
+        verify = self.n['verify_copied_fx_state']
+        for altered in (destination.replace('opaque_state', 'different_state'), destination.replace('chosen', 'other'), destination.replace('BYPASS 0', 'BYPASS 1'), destination.replace(trailer, base64.b64encode(b'\1Sketch Piano' + b'\0' * 5).decode())):
+            self.assertEqual(verify(1, 2, source, altered), (False, []))
+        self.assertEqual(verify(1, 2, destination, destination.replace(trailer, base64.b64encode(b'\0Other' + b'\0' * 5).decode())), (False, []))
+        self.assertEqual(verify(1, 2, source.replace('VSTi:', 'VST3:'), destination.replace('VSTi:', 'VST3:')), (False, []))
 
     def test_invalid_targets_and_stale_guid_do_not_write(self):
         for index in (0, 3, True, "1"):
