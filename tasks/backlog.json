@@ -1213,6 +1213,116 @@
         "Remove a partially created item when initialization or verification fails."
       ],
       "bugs": []
+    },
+    {
+      "id": "RO-027",
+      "category": "read-only",
+      "title": "Read exact native track color and RGB",
+      "status": "testing",
+      "priority": "high",
+      "capability": "get_track_color",
+      "description": "Read exact native track color and RGB",
+      "depends_on": [],
+      "acceptance_criteria": [
+        "Resolve a valid one-based track and optional stable GUID.",
+        "Return exact native color, custom/default flag, and RGB or null for theme default."
+      ],
+      "bugs": []
+    },
+    {
+      "id": "WR-022",
+      "category": "mutation",
+      "title": "Set or replicate exact track color",
+      "status": "testing",
+      "priority": "high",
+      "capability": "set_track_color",
+      "description": "Set or replicate exact track color",
+      "depends_on": [
+        "RO-027"
+      ],
+      "acceptance_criteria": [
+        "Set native color or copy source color, including theme default and custom black.",
+        "Validate pointer/GUID and exclusive inputs before writing; verify applied color in an undo step."
+      ],
+      "bugs": []
+    },
+    {
+      "id": "WR-023",
+      "category": "mutation",
+      "title": "Copy complete FX state into empty destination with verification and rollback",
+      "status": "testing",
+      "priority": "high",
+      "capability": "copy_track_fx_chain",
+      "description": "Copy complete FX state into empty destination with verification and rollback",
+      "depends_on": [],
+      "acceptance_criteria": [
+        "Copy normal FX through the native full-state API into a destination without normal or input FX.",
+        "Preserve opaque plugin state, presets, bypass, offline, wet/dry, pins and channel count; generate separate instance identities.",
+        "Reject source parameter automation/modulation and links before writing; preserve destination items, MIDI, envelopes, routing and all other track properties.",
+        "Compare serialized FX and source state after copy, ignoring only instance GUIDs and UI metadata; remove partial copies and restore channel count on failure, reporting rollback verification.",
+        "Validate actual tuner/Ampknob and instrument/tuner chains plus injected partial-copy rollback in a disposable host project."
+      ],
+      "bugs": [
+        {
+          "id": "BUG-015",
+          "description": "An initial probe requested a larger native chunk buffer than REAPER Python allocates. The final reader requests at most the installed wrapper limit of 4 MiB and rejects unavailable/truncated snapshots.",
+          "status": "fixed",
+          "discovered_during": "runtime-validation"
+        },
+        {
+          "id": "BUG-016",
+          "description": "Newly inserted plugins such as bx_tuner/ReaSynth can name an initially unnamed preset while native-copying, changing serialized metadata. The conservative full-state verification rejects this case and rolls back; explicit preset chains passed host acceptance.",
+          "status": "open",
+          "discovered_during": "runtime-validation"
+        }
+      ]
+    },
+    {
+      "id": "WR-024",
+      "category": "mutation",
+      "title": "Set available audio recording input or replicate source input",
+      "status": "testing",
+      "priority": "high",
+      "capability": "set_track_record_input",
+      "description": "Set available audio recording input or replicate source input",
+      "depends_on": [],
+      "acceptance_criteria": [
+        "Read raw recording input with current device availability and readable channel names.",
+        "Set none, available mono/stereo audio, or supported MIDI input; support exact source-track input replication.",
+        "Reject unavailable and unsupported inputs before writing, and verify the applied value in an undo step."
+      ],
+      "bugs": []
+    },
+    {
+      "id": "WR-025",
+      "category": "mutation",
+      "title": "Set and verify independent input monitoring",
+      "status": "testing",
+      "priority": "high",
+      "capability": "set_track_record_monitoring",
+      "description": "Set and verify independent input monitoring",
+      "depends_on": [],
+      "acceptance_criteria": [
+        "Read and set off/on/auto input monitoring independently of record arm.",
+        "Validate pointer/GUID and mode, group the mutation into one undo step, and verify read-back."
+      ],
+      "bugs": []
+    },
+    {
+      "id": "WR-026",
+      "category": "mutation",
+      "title": "Save named active project without dialogs",
+      "status": "testing",
+      "priority": "high",
+      "capability": "save_project",
+      "description": "Save named active project without dialogs",
+      "depends_on": [],
+      "acceptance_criteria": [
+        "Reject unnamed projects without Save As or inventing a filename.",
+        "Save the active named project and return identity/path with post-save dirty status.",
+        "Report failure when the active identity/path changes or modifications remain after saving."
+      ],
+      "bugs": []
     }
   ]
 }

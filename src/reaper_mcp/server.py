@@ -540,5 +540,72 @@ def get_project_info() -> dict:
     """Return basic information about the current REAPER project."""
     return send_reaper_command("get_project_info")
 
+@mcp.tool()
+def get_track_color(track_index: int, track_guid: str | None = None) -> dict:
+    """Read exact native track color, custom/default flag and RGB."""
+    return send_reaper_command("get_track_color", track_index=track_index, track_guid=track_guid)
+
+
+@mcp.tool()
+def set_track_color(
+    track_index: int, color_raw: int | None = None,
+    source_track_index: int | None = None, track_guid: str | None = None,
+    source_track_guid: str | None = None
+) -> dict:
+    """Set native color (0 resets default), or copy exact source color."""
+    return send_reaper_command("set_track_color", track_index=track_index,
+        color_raw=color_raw, source_track_index=source_track_index,
+        track_guid=track_guid, source_track_guid=source_track_guid)
+
+
+@mcp.tool()
+def copy_track_fx_chain(
+    source_track_index: int, track_index: int,
+    source_track_guid: str | None = None, track_guid: str | None = None
+) -> dict:
+    """Copy complete normal FX state and channel count to an FX-empty track, excluding automation; rollback on failure."""
+    return send_reaper_command("copy_track_fx_chain", source_track_index=source_track_index,
+        track_index=track_index, source_track_guid=source_track_guid, track_guid=track_guid)
+
+
+@mcp.tool()
+def get_track_record_input(track_index: int, track_guid: str | None = None) -> dict:
+    """Read recording input, current device availability and readable name."""
+    return send_reaper_command("get_track_record_input", track_index=track_index, track_guid=track_guid)
+
+
+@mcp.tool()
+def set_track_record_input(
+    track_index: int, record_input_raw: int | None = None,
+    source_track_index: int | None = None, track_guid: str | None = None,
+    source_track_guid: str | None = None
+) -> dict:
+    """Set an available mono/stereo/MIDI input (-1 for none), or copy source input."""
+    return send_reaper_command("set_track_record_input", track_index=track_index,
+        record_input_raw=record_input_raw, source_track_index=source_track_index,
+        track_guid=track_guid, source_track_guid=source_track_guid)
+
+
+@mcp.tool()
+def get_track_record_monitoring(track_index: int, track_guid: str | None = None) -> dict:
+    """Read off/on/auto input monitoring independently from record arm."""
+    return send_reaper_command("get_track_record_monitoring", track_index=track_index, track_guid=track_guid)
+
+
+@mcp.tool()
+def set_track_record_monitoring(
+    track_index: int, mode: str, track_guid: str | None = None
+) -> dict:
+    """Set off, on, or auto (tape style) input monitoring and verify."""
+    return send_reaper_command("set_track_record_monitoring", track_index=track_index,
+        mode=mode, track_guid=track_guid)
+
+
+@mcp.tool()
+def save_project() -> dict:
+    """Save the active named project; reject unsaved projects without a dialog."""
+    return send_reaper_command("save_project")
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

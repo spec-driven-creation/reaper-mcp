@@ -97,6 +97,106 @@ powershell -ExecutionPolicy Bypass -File scripts/start_backlog_visualizer.ps1
 
 ## Tool reference
 
+### Preparing recording tracks
+
+The tools below operate on normal tracks in the active project. Track indexes
+are one-based. An optional `track_guid` guards against a stale destination index;
+copy operations also accept `source_track_guid`. Read tools return the current
+GUID. Mutations validate pointers and identities, create an undo step, and verify
+the applied state. They do not arm recording.
+
+<!-- markdownlint-disable MD013 -->
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `get_track_color` | `track_index`, optional `track_guid` | `color_raw`, `custom`, `rgb` |
+| `set_track_color` | `track_index`, exactly one of `color_raw` or `source_track_index`, optional GUIDs | Requested/applied raw value and readable color |
+| `copy_track_fx_chain` | `source_track_index`, destination `track_index`, optional GUIDs | Verified count, channel count and identities |
+| `get_track_record_input` | `track_index`, optional `track_guid` | `record_input_raw`, `kind`, `name`, `available` |
+| `set_track_record_input` | `track_index`, exactly one of `record_input_raw` or `source_track_index`, optional GUIDs | Requested/applied value and current device name |
+| `get_track_record_monitoring` | `track_index`, optional `track_guid` | `record_monitoring_raw`, `mode` |
+| `set_track_record_monitoring` | `track_index`, `mode`, optional `track_guid` | Verified raw and readable mode |
+| `save_project` | none | `project_id`, `project_path`, `dirty`, `success` |
+
+<!-- markdownlint-enable MD013 -->
+
+Color `0` means the theme default (`custom: false`, `rgb: null`); custom native
+colors include REAPER's `0x1000000` flag. Copy from a source to preserve the exact
+native color across tracks, including default versus custom black.
+
+FX copying uses `TrackFX_CopyToTrack` with full serialized state verification,
+including opaque
+plugin state, presets, order, bypass, offline, wet/dry and pin mappings. It also
+copies `I_NCHAN` so those mappings retain their channel context. Input FX are not
+copied. The destination must have neither normal nor input FX. New FX instance
+GUIDs are generated. Source FX parameter automation/modulation and external
+parameter links are rejected before mutation. Items, MIDI, automation, sends and
+other destination properties are preserved. Full FX state and non-FX destination
+state are compared after writing; a failed write or mismatch restores and checks
+the original destination snapshot (`rollback_succeeded` in errors). The source
+is never written. Only FX instance GUIDs and FX window/selection metadata are
+excluded from comparisons. REAPER can update the source FX window selection.
+A conservative mismatch can reject plugins that reserialize their state
+differently, including newly inserted bx_tuner/ReaSynth instances whose unnamed
+initial preset gains a name on copy. The host probe uses explicit factory
+presets. A mismatch leaves the source unchanged and rolls back the destination;
+it does not silently normalize the source. Track snapshots are limited to 4 MiB;
+larger or
+unavailable chunks are rejected before writing. This is not an audio-equivalence
+or plugin-license check.
+
+Recording input values preserve REAPER's raw encoding: `-1` is no input; mono
+inputs start at `0`; stereo pairs start at `1024` (first pair). Audio channels
+must exist on the current device. Read or copy a source input to avoid guessing.
+MIDI inputs are also supported when available; virtual keyboard and all-input
+selectors retain their raw encoding. Multichannel and ReaRoute/loopback inputs
+are not supported by this setter. Monitoring modes are `off` (0), `on` (1), and
+`auto` (2, REAPER's tape-style monitoring, disabled during playback).
+
+`save_project` saves only an active project with an existing filename.
+An unnamed project returns an error without opening Save As. Success requires
+the same project/path and no pending modifications after saving;
+saving has no undo step.
+
+Example sequence: source guitar 2, source MIDI 3, destination guitar 5 and
+MIDI 6.
+
+```text
+get_track_color(track_index=2)
+set_track_color(track_index=5, source_track_index=2)
+copy_track_fx_chain(source_track_index=2, track_index=5)
+get_track_record_input(track_index=2)
+set_track_record_input(track_index=5, source_track_index=2)
+get_track_record_monitoring(track_index=2)
+set_track_record_monitoring(track_index=5, mode="auto")
+set_track_color(track_index=6, source_track_index=3)
+copy_track_fx_chain(source_track_index=3, track_index=6)
+set_track_record_input(track_index=6, source_track_index=3)
+set_track_record_monitoring(track_index=6, mode="off")
+save_project()
+```
+
+Use the mode actually read from the source. A bypassed amplifier stays bypassed;
+enabling it requires the separate explicit tool
+`set_fx_enabled(track_index=5, fx_index=2, enabled=true)`.
+
+For a finite host acceptance probe, run
+`scripts/validate_recording_setup_in_reaper.lua` as a ReaScript. It loads the
+Python probe, creates a disposable project tab with bx_tuner, Ampknob Trivium
+Rhythm, ReaSynth and existing MIDI, and restores the original active tab. Results
+and the disposable saved project go under `.local/recording-validation/`.
+Automated mock tests are separate: `uv run python -m unittest discover -s tests`.
+
+### MCP connection diagnosis
+
+A TCP response on port 8765 proves only that the bridge is running. The MCP client
+must also start the external stdio server successfully. For Codex, the configured
+server's `cwd` must point to this checkout and its command must launch
+`uv run python -m reaper_mcp.server`. A stale checkout path can prevent all tools
+from appearing even while TCP works. Reconnect the MCP client after correcting
+its server configuration or after changing tool definitions. Restart the bridge
+ReaScript after deploying bridge changes; deployment does not reload running code.
+
 Requests below show the MCP argument object. Responses are summarized because
 most include additional identity and raw/readable fields useful to clients.
 

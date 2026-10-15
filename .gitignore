@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+.local/
+.local-*.lua
 
 # REAPER project autosaves
 /example/reaper_test/AutoSaves/

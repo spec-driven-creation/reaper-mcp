@@ -4119,7 +4119,318 @@ def loop():
 
     RPR_defer("loop()")
 
+def resolve_recording_track(request, field="track_index", guid_field="track_guid"):
+    context, error = resolve_track({"track_index": request.get(field)})
+    if error:
+        return None, error
+    track = context["track"]
+    if not RPR_ValidatePtr2(0, track, "MediaTrack*"):
+        return None, {"error": "Track pointer is no longer valid"}
+    guid = recording_track_guid(track)
+    if request.get(guid_field) is not None and request[guid_field] != guid:
+        return None, {"error": f"{guid_field} does not match track identity"}
+    return {**context, "track_guid": guid}, None
+
+
+def recording_track_guid(track):
+    return RPR_GetSetMediaTrackInfo_String(track, "GUID", "", False)[3]
+
+
+def recording_identity(context):
+    return {key: context[key] for key in ("track_index", "track_name", "track_guid")}
+
+
+def read_track_color(track):
+    raw = int(RPR_GetMediaTrackInfo_Value(track, "I_CUSTOMCOLOR"))
+    rgb = RPR_ColorFromNative(raw & 0xffffff, 0, 0, 0)
+    return {"color_raw": raw, "custom": bool(raw & 0x1000000),
+            "rgb": list(rgb[1:4]) if raw & 0x1000000 else None}
+
+
+def handle_get_track_color(request):
+    context, error = resolve_recording_track(request)
+    if error:
+        return error
+    return {**recording_identity(context), **read_track_color(context["track"])}
+
+
+def write_recording_value(context, attribute, value, label):
+    track = context["track"]
+    before = RPR_GetMediaTrackInfo_Value(track, attribute)
+    RPR_Undo_BeginBlock2(0)
+    try:
+        if not RPR_SetMediaTrackInfo_Value(track, attribute, value):
+            raise RuntimeError("REAPER rejected the write")
+        applied = RPR_GetMediaTrackInfo_Value(track, attribute)
+        if applied != value or recording_track_guid(track) != context["track_guid"]:
+            raise RuntimeError("Track write read-back verification failed")
+        RPR_TrackList_AdjustWindows(False)
+        return {"success": True, **recording_identity(context),
+                "requested_raw": value, "applied_raw": int(applied)}
+    except Exception as error:
+        try:
+            RPR_SetMediaTrackInfo_Value(track, attribute, before)
+            restored = RPR_GetMediaTrackInfo_Value(track, attribute) == before
+        except Exception:
+            restored = False
+        return {"error": str(error), "rollback_succeeded": restored}
+    finally:
+        RPR_Undo_EndBlock2(0, label, -1)
+
+
+def handle_set_track_color(request):
+    context, error = resolve_recording_track(request)
+    if error:
+        return error
+    raw = request.get("color_raw")
+    if request.get("source_track_index") is not None:
+        if raw is not None:
+            return {"error": "Specify color_raw or source_track_index, not both"}
+        source, error = resolve_recording_track(request, "source_track_index", "source_track_guid")
+        if error:
+            return error
+        raw = read_track_color(source["track"])["color_raw"]
+    if type(raw) is not int or not (raw == 0 or 0x1000000 <= raw <= 0x1ffffff):
+        return {"error": "color_raw must be 0 (default) or a native custom color with 0x1000000 set"}
+    result = write_recording_value(context, "I_CUSTOMCOLOR", raw, "Set track color")
+    if result.get("success"):
+        result.update(read_track_color(context["track"]))
+    return result
+
+
+def describe_record_input(raw):
+    if raw == -1:
+        return {"record_input_raw": raw, "kind": "none", "available": True, "name": "No input"}
+    if raw & 4096:
+        channel, device = raw & 31, (raw >> 5) & 63
+        available = 0 <= raw <= 8191 and channel <= 16
+        if device in (62, 63):
+            name = "Virtual MIDI keyboard" if device == 62 else "All MIDI inputs"
+        else:
+            info = RPR_GetMIDIInputName(device, "", 512)
+            available = available and bool(info[0])
+            name = info[2]
+        return {"record_input_raw": raw, "kind": "midi", "available": available,
+                "name": f"{name}, channel {channel or 'all'}"}
+    stereo = bool(raw & 1024)
+    start = raw & 1023
+    count = 2 if stereo else 1
+    available = 0 <= raw < 2048 and start < 512 and start + count <= RPR_GetNumAudioInputs()
+    names = [RPR_GetInputChannelName(i) for i in range(start, start + count)] if available else []
+    return {"record_input_raw": raw, "kind": "stereo" if stereo else "mono",
+            "available": available, "name": " / ".join(names) if names else "Unavailable audio input"}
+
+
+def handle_get_track_record_input(request):
+    context, error = resolve_recording_track(request)
+    if error:
+        return error
+    raw = int(RPR_GetMediaTrackInfo_Value(context["track"], "I_RECINPUT"))
+    return {**recording_identity(context), **describe_record_input(raw)}
+
+
+def handle_set_track_record_input(request):
+    context, error = resolve_recording_track(request)
+    if error:
+        return error
+    raw = request.get("record_input_raw")
+    if request.get("source_track_index") is not None:
+        if raw is not None:
+            return {"error": "Specify record_input_raw or source_track_index, not both"}
+        source, error = resolve_recording_track(request, "source_track_index", "source_track_guid")
+        if error:
+            return error
+        raw = int(RPR_GetMediaTrackInfo_Value(source["track"], "I_RECINPUT"))
+    if type(raw) is not int or raw < -1:
+        return {"error": "record_input_raw must be -1 or a supported REAPER input integer"}
+    state = describe_record_input(raw)
+    if not state["available"]:
+        return {"error": "Recording input is unavailable on the current device", **state}
+    result = write_recording_value(context, "I_RECINPUT", raw, "Set track recording input")
+    if result.get("success"):
+        result.update(handle_get_track_record_input(request))
+    return result
+
+
+def handle_get_track_record_monitoring(request):
+    context, error = resolve_recording_track(request)
+    if error:
+        return error
+    raw = int(RPR_GetMediaTrackInfo_Value(context["track"], "I_RECMON"))
+    return {**recording_identity(context), "record_monitoring_raw": raw,
+            "mode": {0: "off", 1: "on", 2: "auto"}.get(raw, "unknown")}
+
+
+def handle_set_track_record_monitoring(request):
+    context, error = resolve_recording_track(request)
+    if error:
+        return error
+    mode = request.get("mode")
+    if mode not in ("off", "on", "auto"):
+        return {"error": "mode must be off, on, or auto (tape style)"}
+    result = write_recording_value(context, "I_RECMON", {"off": 0, "on": 1, "auto": 2}[mode], "Set input monitoring")
+    if result.get("success"):
+        result.update(handle_get_track_record_monitoring(request))
+    return result
+
+
+def read_recording_chunk(track):
+    # REAPER's Python rpr_packs allocates 4 MiB regardless of the requested size.
+    # Never tell the native API it has a larger buffer than the wrapper allocates.
+    size = 4 * 1024 * 1024
+    result = RPR_GetTrackStateChunk(track, "", size, False)
+    if not result[0] or len(result[2].encode("utf-8")) >= size - 1:
+        raise RuntimeError("Track state unavailable or exceeds safe 4 MiB Python chunk limit")
+    return result[2]
+
+
+def chunk_block_span(chunk, name):
+    lines = chunk.splitlines(keepends=True)
+    depth, offset, start = 0, 0, None
+    for line in lines:
+        text = line.strip()
+        if depth == 1 and text == "<" + name:
+            start = offset
+        if text.startswith("<"):
+            depth += 1
+        elif text == ">":
+            depth -= 1
+            if start is not None and depth == 1:
+                return start, offset + len(line)
+        offset += len(line)
+    return None
+
+
+def recording_fx_chunk(chunk):
+    span = chunk_block_span(chunk, "FXCHAIN")
+    return chunk[slice(*span)] if span else ""
+
+
+def portable_fx_chunk(chunk):
+    # Track envelopes live outside FXCHAIN; parameter envelopes live within it.
+    # Omit automation and reject external modulation links rather than retargeting them.
+    lines, skip, output = chunk.splitlines(keepends=True), 0, []
+    for line in lines:
+        text = line.strip()
+        if text.startswith("PLINK ") and not skip:
+            raise RuntimeError("FX parameter links are unsupported; remove links before copying")
+        if not skip and text.startswith(("<PARMENV", "<PROGRAMENV")):
+            skip = 1
+            continue
+        if skip:
+            skip += int(text.startswith("<")) - int(text == ">")
+            continue
+        if text.startswith("FXID "):
+            line = "FXID {" + str(uuid.uuid4()).upper() + "}\n"
+        output.append(line)
+    return "".join(output)
+
+
+def comparable_fx_chunk(chunk):
+    # Only generated instance identity and window placement are irrelevant to sound.
+    return "\n".join(line.strip() for line in chunk.splitlines()
+                     if not line.strip().startswith(("FXID ", "FLOATPOS ", "SHOW ", "LASTSEL ")))
+
+
+def comparable_recording_source(chunk):
+    return "\n".join(line for line in chunk.splitlines()
+                     if not line.strip().startswith(("FLOATPOS ", "SHOW ", "LASTSEL ")))
+
+
+def handle_copy_track_fx_chain(request):
+    destination, error = resolve_recording_track(request)
+    if error:
+        return error
+    source, error = resolve_recording_track(request, "source_track_index", "source_track_guid")
+    if error:
+        return error
+    src, dst = source["track"], destination["track"]
+    if source["track_guid"] == destination["track_guid"]:
+        return {"error": "Source and destination must be different tracks"}
+    if RPR_TrackFX_GetCount(dst) or RPR_TrackFX_GetRecCount(dst):
+        return {"error": "Destination must have no normal or input FX"}
+    try:
+        original = read_recording_chunk(dst)
+        source_before = read_recording_chunk(src)
+        fx = recording_fx_chunk(source_before)
+        portable = portable_fx_chunk(fx)
+        if comparable_fx_chunk(portable) != comparable_fx_chunk(fx):
+            return {"error": "Source FX parameter automation/modulation is unsupported; copy would also transfer automation"}
+        if not fx or not RPR_TrackFX_GetCount(src):
+            return {"error": "Source has no normal FX chain"}
+        channels = int(RPR_GetMediaTrackInfo_Value(src, "I_NCHAN"))
+        original_channels = int(RPR_GetMediaTrackInfo_Value(dst, "I_NCHAN"))
+        source_count = RPR_TrackFX_GetCount(src)
+    except Exception as error:
+        return {"error": str(error)}
+    RPR_Undo_BeginBlock2(0)
+    try:
+        if not RPR_SetMediaTrackInfo_Value(dst, "I_NCHAN", channels):
+            raise RuntimeError("REAPER failed to apply channel count")
+        for index in range(source_count):
+            RPR_TrackFX_CopyToTrack(src, index, dst, index, False)
+            if RPR_TrackFX_GetCount(dst) != index + 1:
+                raise RuntimeError(f"REAPER failed to copy FX {index + 1}")
+        applied = read_recording_chunk(dst)
+        verification = {
+            "identity": recording_track_guid(dst) == destination["track_guid"],
+            "fx_count": RPR_TrackFX_GetCount(dst) == source_count,
+            "fx_state": comparable_fx_chunk(recording_fx_chunk(applied)) == comparable_fx_chunk(fx),
+            "channels": int(RPR_GetMediaTrackInfo_Value(dst, "I_NCHAN")) == channels,
+            "source_unchanged": comparable_recording_source(read_recording_chunk(src)) == comparable_recording_source(source_before),
+        }
+        if not all(verification.values()):
+            raise RuntimeError(f"Full FX state read-back verification failed: {verification}")
+        # Verify all non-FX destination state, including MIDI/items and routing.
+        def without_fx(value):
+            block = recording_fx_chunk(value)
+            return re.sub(r"(?m)^NCHAN \d+", "NCHAN", value.replace(block, "", 1) if block else value)
+        if without_fx(applied) != without_fx(original):
+            raise RuntimeError("Non-FX destination state changed")
+        return {"success": True, **recording_identity(destination),
+                "source": recording_identity(source), "fx_count": RPR_TrackFX_GetCount(dst),
+                "channels": channels, "verified_full_state": True}
+    except Exception as error:
+        try:
+            for index in reversed(range(RPR_TrackFX_GetCount(dst))):
+                if not RPR_TrackFX_Delete(dst, index):
+                    raise RuntimeError("REAPER failed to remove a partially copied FX")
+            restored = bool(RPR_SetMediaTrackInfo_Value(dst, "I_NCHAN", original_channels))
+            rollback_chunk = read_recording_chunk(dst)
+            restored = (restored and RPR_TrackFX_GetCount(dst) == 0
+                        and rollback_chunk.replace(recording_fx_chunk(rollback_chunk), "", 1)
+                        == original.replace(recording_fx_chunk(original), "", 1))
+        except Exception:
+            restored = False
+        return {"error": str(error), "rollback_succeeded": restored}
+    finally:
+        RPR_Undo_EndBlock2(0, "Copy track FX chain", -1)
+
+
+def handle_save_project(request):
+    project, _, path, _ = RPR_EnumProjects(-1, "", 32768)
+    if not path:
+        return {"error": "Active project has no path; save it once explicitly before using save_project"}
+    RPR_Main_SaveProject(project, False)
+    after, _, applied_path, _ = RPR_EnumProjects(-1, "", 32768)
+    dirty = bool(RPR_IsProjectDirty(project))
+    verified = after == project and applied_path == path and not dirty
+    result = {"success": verified, "project_id": str(project),
+              "project_path": applied_path, "dirty": dirty}
+    if not verified:
+        result["error"] = "Project save read-back verification failed"
+    return result
+
+
 COMMAND_HANDLERS = {
+    "get_track_color": handle_get_track_color,
+    "set_track_color": handle_set_track_color,
+    "copy_track_fx_chain": handle_copy_track_fx_chain,
+    "get_track_record_input": handle_get_track_record_input,
+    "set_track_record_input": handle_set_track_record_input,
+    "get_track_record_monitoring": handle_get_track_record_monitoring,
+    "set_track_record_monitoring": handle_set_track_record_monitoring,
+    "save_project": handle_save_project,
     "get_track_count": handle_get_track_count,
     "get_project_info": handle_get_project_info,
     "get_tempo_map": handle_get_tempo_map,
