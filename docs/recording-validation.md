@@ -1,7 +1,8 @@
 # Recording preparation validation — 2026-10-15
 
-The new capability tasks RO-027 and WR-022 through WR-026 are in `testing`.
-User acceptance remains pending. FiruletMap was not modified.
+The user accepted capability tasks RO-027 and WR-022 through WR-026 on
+2026-10-15; their backlog status is `completed`. BUG-016 remains open as a
+documented limitation. FiruletMap was not modified.
 
 ## Automated evidence
 
