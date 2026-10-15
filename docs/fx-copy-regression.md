@@ -1,8 +1,10 @@
 # FX copy and default-color regressions — 2026-10-15
 
 BUG-017 and BUG-018 were registered before changing the implementation. Their
-corrections have automated and host evidence below, but remain open pending
-explicit human acceptance. The earlier BUG-016 closure is preserved.
+corrections have automated and host evidence below and were explicitly accepted
+by the user on 2026-10-15. Both bugs are closed as fixed in commit
+`d985c3ec9c06ef9694a1fa096cb60e9a93221adb`; WR-022 and WR-023 are completed.
+The earlier BUG-016 closure is preserved.
 
 ## Reproduction and precise differences
 

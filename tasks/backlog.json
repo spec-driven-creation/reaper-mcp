@@ -1239,7 +1239,7 @@
       "id": "WR-022",
       "category": "mutation",
       "title": "Set or replicate exact track color",
-      "status": "testing",
+      "status": "completed",
       "priority": "high",
       "capability": "set_track_color",
       "description": "Set or replicate exact track color",
@@ -1254,9 +1254,10 @@
         {
           "id": "BUG-018",
           "description": "Copying a default color with custom=false and raw I_CUSTOMCOLOR=16576 is rejected because the setter requires the custom flag. Preserve default-color behavior when copying without making it a custom color.",
-          "status": "open",
+          "status": "fixed",
           "discovered_during": "runtime-validation",
-          "validation_notes": "Correction implemented and host-validated: copy raw 16576 exactly with custom=false; never force the custom flag. Awaiting explicit human acceptance; see docs/fx-copy-regression.md."
+          "validation_notes": "Correction implemented and host-validated: copy raw 16576 exactly with custom=false; never force the custom flag. Explicitly accepted by the user on 2026-10-15; see docs/fx-copy-regression.md.",
+          "fixed_in": "d985c3ec9c06ef9694a1fa096cb60e9a93221adb"
         }
       ]
     },
@@ -1264,7 +1265,7 @@
       "id": "WR-023",
       "category": "mutation",
       "title": "Copy complete FX state into empty destination with verification and rollback",
-      "status": "testing",
+      "status": "completed",
       "priority": "high",
       "capability": "copy_track_fx_chain",
       "description": "Copy complete FX state into empty destination with verification and rollback",
@@ -1292,9 +1293,10 @@
         {
           "id": "BUG-017",
           "description": "Real FM-003 to FM-004 GTune/Ampknob and Sketch Piano/GTune chains fail full serialized FX verification with fx_state=false and successful rollback. Reproduce precise native-copy differences before rollback and accept only proven non-sonic metadata while retaining strict musical-state verification.",
-          "status": "open",
+          "status": "fixed",
           "discovered_during": "runtime-validation",
-          "validation_notes": "Correction implemented and validated in both captured chains, the original live Sketch Piano snapshot, injected sonic/partial failures and guarded FiruletMap completion. FLOAT rectangles are scoped UI metadata; the empty VST2 wrapper label is accepted only with unchanged serialized remainder and exact native chunk and musical API state. Awaiting explicit human acceptance; see docs/fx-copy-regression.md."
+          "validation_notes": "Correction implemented and validated in both captured chains, the original live Sketch Piano snapshot, injected sonic/partial failures and guarded FiruletMap completion. FLOAT rectangles are scoped UI metadata; the empty VST2 wrapper label is accepted only with unchanged serialized remainder and exact native chunk and musical API state. Explicitly accepted by the user on 2026-10-15; see docs/fx-copy-regression.md.",
+          "fixed_in": "d985c3ec9c06ef9694a1fa096cb60e9a93221adb"
         }
       ]
     },
