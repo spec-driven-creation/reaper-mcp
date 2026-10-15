@@ -1,7 +1,7 @@
 # Exact note-item timing and GUID deletion validation
 
-Validated on 2026-10-15. Tasks WR-007 (extended) and WR-027 (new) remain in
-`testing` until explicit user acceptance. No FiruletMap project was modified.
+Validated and explicitly accepted by the user on 2026-10-15. Tasks WR-007
+(extended) and WR-027 (new) are `completed`. No FiruletMap project was modified.
 
 ## Automated evidence
 
