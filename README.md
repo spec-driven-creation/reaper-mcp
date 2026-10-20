@@ -53,6 +53,26 @@ Both the old and requested read intervals must fit entirely within the source.
 The existing `B_LOOPSRC` flag is preserved, with a warning when enabled; an
 extension never wraps/repeats audio. Values are never clamped to source bounds.
 
+Source diagnostics distinguish the disk file from REAPER's in-memory source.
+`before`/`after` include `source_pointer_valid`, `source_length_is_qn`,
+`source_sample_rate`, `source_channels`, `source_has_parent`, `source_online`,
+`source_file_exists` and `source_file_readable`. Length is read from REAPER in
+seconds; the Python binding returns `(length, source, lengthIsQNOut)`. No WAV
+header duration is substituted when REAPER returns zero or unavailable metadata.
+
+When installed, SWS's read-only `CF_GetMediaSourceOnline` supplies the native
+`source_online` boolean. SWS is optional: without it the value is `null`, and
+unusable native metadata is reported as `source_offline_or_unavailable` rather
+than guessing offline state. Other preflight `error_code` values include
+`invalid_source_pointer`, `source_file_unavailable`, `source_offline`,
+`source_metadata_unavailable` (online but unusable metadata), and
+`source_length_not_seconds`. These failures occur before Undo or item writes.
+The bridge never brings sources online, changes availability preferences or
+replaces source objects to make an edit succeed. If the file is readable but
+REAPER reports it offline, bring it online in REAPER before retrying. Check
+Preferences > Media > Set media items offline when application is not active;
+this preference can prevent background MCP edits. It is not changed by the tool.
+
 Omitted manual fades and existing automatic fades are preserved exactly. New
 manual fades must be finite, nonnegative and no longer than the new item. An
 explicit fade is rejected if that edge has a positive automatic fade. Resizing

@@ -1410,7 +1410,15 @@
         "Use one native Undo step, operation-local verified rollback and MCP isError on failures.",
         "Validate isolated host WAV edges, rate 1 and another constant rate, failures, Undo/Redo and injected rollback; do not modify real recordings."
       ],
-      "bugs": []
+      "bugs": [
+        {
+          "id": "BUG-020",
+          "description": "set_item_edges reports a generic source-unavailable error for a valid real WAV whose REAPER source length reads zero; diagnose binding, pointer and native online state without file-length fallback.",
+          "status": "fixed",
+          "discovered_during": "runtime-validation",
+          "validation_notes": "Lua and Python confirmed a valid direct WAVE pointer but native source offline, length 0 and sample rate 0; the disk WAV remains readable at 7.4755625 seconds. Added separate pointer/file/native metadata and optional SWS online diagnostics without file-duration fallback or auto-online mutation. A copied PCM24/96kHz WAV returned 7.4755625 natively and the requested 3.125/6.53/3.405/3.125 edges with invariant samples; 68 unit tests and 65 isolated REAPER checks passed, including offline/missing source, bounds, loops, Undo/Redo and rollback. Bridge deployment and MCP discovery passed; existing live bridge must be restarted to load the fix."
+        }
+      ]
     }
   ]
 }

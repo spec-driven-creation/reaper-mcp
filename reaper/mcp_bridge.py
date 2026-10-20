@@ -4905,6 +4905,65 @@ def item_edges_residual(chunk, fades):
     return "\n".join(lines)
 
 
+def item_edges_source_online(source):
+    # Optional SWS read-only API; the call layout matches sws_python64.py.
+    # Without SWS, do not infer a definitive offline flag from a zero length.
+    if not RPR_APIExists("CF_GetMediaSourceOnline"):
+        return None
+    from ctypes import CFUNCTYPE, c_byte, c_uint64
+    from reaper_python import rpr_getfp, rpr_packp
+    function = CFUNCTYPE(c_byte, c_uint64)(rpr_getfp("CF_GetMediaSourceOnline"))
+    return bool(function(rpr_packp("PCM_source*", source)))
+
+
+def item_edges_source_state(source):
+    import os
+    valid = bool(RPR_ValidatePtr2(0, source, "PCM_source*"))
+    info = {"source_pointer_valid": valid, "source_file": None, "source_type": None,
+            "source_length": None, "source_length_is_qn": None,
+            "source_sample_rate": None, "source_channels": None,
+            "source_has_parent": None, "source_online": None,
+            "source_file_exists": False, "source_file_readable": False}
+    if not valid:
+        return info
+    # Python returns (length, source, lengthIsQNOut), unlike Lua's two values.
+    length, returned_source, is_qn = RPR_GetMediaSourceLength(source, False)
+    if returned_source != source or type(is_qn) not in (bool, int) or is_qn not in (0, 1):
+        raise RuntimeError("GetMediaSourceLength returned an invalid source/unit result")
+    parent = RPR_GetMediaSourceParent(source)
+    info.update(source_file=RPR_GetMediaSourceFileName(source, "", 32768)[1],
+                source_type=RPR_GetMediaSourceType(source, "", 256)[1],
+                source_length=length, source_length_is_qn=bool(is_qn),
+                source_sample_rate=RPR_GetMediaSourceSampleRate(source),
+                source_channels=RPR_GetMediaSourceNumChannels(source),
+                source_has_parent=parent not in (None, 0) and not bool(re.search(r"0x0+$", str(parent))),
+                source_online=item_edges_source_online(source))
+    info["source_file_exists"] = os.path.isfile(info["source_file"])
+    if info["source_file_exists"]:
+        try:
+            with open(info["source_file"], "rb") as audio:
+                info["source_file_readable"] = bool(audio.read(1))
+        except OSError:
+            pass
+    return info
+
+
+def item_edges_source_error(info):
+    if not info["source_pointer_valid"]:
+        return "invalid_source_pointer", "The take has no valid REAPER PCM_source pointer"
+    if not info["source_file_exists"] or not info["source_file_readable"]:
+        return "source_file_unavailable", "Source file is missing, empty or unreadable; REAPER source availability is reported separately"
+    if info["source_online"] is False:
+        return "source_offline", "REAPER reports the source offline; file existence/readability does not make the REAPER source online. Bring it online in REAPER and retry; check the preference to set media offline when inactive"
+    if (not math.isfinite(info["source_length"]) or info["source_length"] <= 0
+            or info["source_sample_rate"] <= 0 or info["source_channels"] <= 0):
+        code = "source_metadata_unavailable" if info["source_online"] is True else "source_offline_or_unavailable"
+        return code, "REAPER did not provide usable source length/sample-rate/channel metadata; no file-duration fallback was used"
+    if info["source_length_is_qn"]:
+        return "source_length_not_seconds", "REAPER source length is in quarter notes, not seconds"
+    return None, None
+
+
 def item_edges_state(item):
     take = RPR_GetTake(item, 0)
     source = RPR_GetMediaItemTake_Source(take)
@@ -4915,9 +4974,7 @@ def item_edges_state(item):
                    ("D_STARTOFFS", "D_PLAYRATE", "D_PITCH", "B_PPITCH", "D_VOL", "D_PAN")})
     values.update(item_guid=get_item_identity(item),
                   take_guid=RPR_GetSetMediaItemTakeInfo_String(take, "GUID", "", False)[3],
-                  source_file=RPR_GetMediaSourceFileName(source, "", 32768)[1],
-                  source_type=RPR_GetMediaSourceType(source, "", 256)[1],
-                  source_length=RPR_GetMediaSourceLength(source, False)[0])
+                  **item_edges_source_state(source))
     values["end_seconds"] = values["D_POSITION"] + values["D_LENGTH"]
     return values
 
@@ -4927,7 +4984,7 @@ def item_edges_close(a, b):
 
 
 def handle_set_item_edges(request):
-    before, after, identity = None, None, {}
+    before, after, identity, error_code = None, None, {}, None
     try:
         project, identity = get_active_project_identity()
         if not RPR_ValidatePtr2(project, project, "ReaProject*") or RPR_GetPlayState() != 0:
@@ -4969,9 +5026,11 @@ def handle_set_item_edges(request):
             raise ValueError("Exactly one audio take is supported")
         take = RPR_GetTake(item, 0)
         source = RPR_GetMediaItemTake_Source(take)
-        parent = RPR_GetMediaSourceParent(source)
-        if (RPR_TakeIsMIDI(take) or RPR_GetMediaSourceType(source, "", 256)[1] != "WAVE"
-                or not re.search(r"0x0+$", str(parent)) and parent is not None and parent != 0):
+        before = item_edges_state(item)
+        if not before["source_pointer_valid"]:
+            error_code, message = item_edges_source_error(before)
+            raise ValueError(message)
+        if RPR_TakeIsMIDI(take) or before["source_type"] != "WAVE" or before["source_has_parent"]:
             raise ValueError("Only plain WAV sources are supported; MIDI, sections and reversed sources are rejected")
         if (RPR_GetTakeNumStretchMarkers(take) != 0 or RPR_CountTakeEnvelopes(take) != 0
                 or RPR_TakeFX_GetCount(take) != 0
@@ -4986,12 +5045,9 @@ def handle_set_item_edges(request):
             envelope_type = chunk[2].lstrip().split()[0]
             if envelope_type not in ("<TEMPOENVEX", "<VOLENV2", "<PANENV2", "<WIDTHENV2", "<MUTEENV"):
                 raise ValueError("Project playrate or unrecognized master envelope is unsupported")
-        before = item_edges_state(item)
-        import os
-        if (not os.path.isfile(before["source_file"]) or RPR_GetMediaSourceSampleRate(source) <= 0
-                or RPR_GetMediaSourceNumChannels(source) <= 0
-                or RPR_GetMediaSourceLength(source, False)[2]):
-            raise ValueError("Source unavailable or source length is not in seconds")
+        error_code, message = item_edges_source_error(before)
+        if error_code:
+            raise ValueError(message)
         rate = before["D_PLAYRATE"]
         offset = before["D_STARTOFFS"] + (start - before["D_POSITION"]) * rate
         source_end = offset + length * rate
@@ -5019,7 +5075,7 @@ def handle_set_item_edges(request):
         if get_active_project_identity()[0] != project:
             raise RuntimeError("Active project changed before mutation")
     except Exception as error:
-        return {**identity, "error": str(error), "before": before, "after": after,
+        return {**identity, "error": str(error), "error_code": error_code, "before": before, "after": after,
                 "verification": {}, "warnings": [], "rollback": {"attempted": False}}
 
     # REAPER runs this handler synchronously on its main thread, without yielding.

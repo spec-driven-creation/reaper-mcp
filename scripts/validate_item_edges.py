@@ -18,11 +18,11 @@ def check(label, value):
     assert value, label
 
 
-def audio_samples(take):
+def audio_samples(take, positions=(5.25, 6.125, 7.25)):
     accessor = RPR_CreateTakeAudioAccessor(take)
     try:
         samples = []
-        for t in (5.25, 6.125, 7.25):
+        for t in positions:
             buffer = [0.0] * 64
             position = RPR_GetMediaItemInfo_Value(RPR_GetMediaItemTake_Item(take), 'D_POSITION')
             result, buffer = RPR_GetAudioAccessorSamples(accessor, 48000, 1, t - position, 64, buffer)
@@ -140,7 +140,8 @@ try:
     assert RPR_SetItemStateChunk(item, source_chunk, False)
     missing = source_chunk.replace('fixture.wav', 'absent-fixture.wav')
     assert RPR_SetItemStateChunk(item, missing, False)
-    check('missing-source', 'error' in handle_set_item_edges(request))
+    missing_result = handle_set_item_edges(request)
+    check('missing-source', missing_result.get('error_code') == 'source_file_unavailable' and not missing_result['rollback']['attempted'])
     assert RPR_SetItemStateChunk(item, source_chunk, False)
     take = RPR_GetTake(item, 0)
     native = RPR_SetMediaItemTakeInfo_Value
@@ -166,6 +167,55 @@ try:
     failed = handle_set_item_edges({**request, 'start_seconds': 4.25, 'end_seconds': 9})
     RPR_SetMediaItemTakeInfo_Value = native
     check('verification-failure-snapshot-rollback', fired[0] and 'error' in failed and failed['rollback']['verified'] and failed['rollback'].get('snapshot_restored'))
+
+    # BUG-020: a local copy of the reported mono PCM24/96 kHz WAV, never the live item.
+    reproduction_file = OUT / 'FM009-copy.wav'
+    assert reproduction_file.is_file(), 'Copy the reported WAV into the disposable directory first'
+    RPR_Undo_BeginBlock2(0)
+    reproduction = RPR_AddMediaItemToTrack(track)
+    assert RPR_SetItemStateChunk(reproduction, '<ITEM\nPOSITION 3.2\nLENGTH 3.2\nLOOP 1\nSOFFS 3.2\nFADEIN 1 0.01 0 1 0 0 0\nFADEOUT 1 0.01 0 1 0 0 0\n<SOURCE WAVE\nFILE "' + reproduction_file.as_posix() + '"\n>\n>\n', False)
+    RPR_Undo_EndBlock2(0, 'Prepare isolated real-WAV reproduction', 4)
+    reproduction_take = RPR_GetTake(reproduction, 0)
+    reproduction_source = RPR_GetMediaItemTake_Source(reproduction_take)
+    original_reproduction = item_edges_chunk(reproduction)
+    readback = item_edges_state(reproduction)
+    check('real-copy-native-duration-seconds', readback['source_length'] == 7.4755625 and not readback['source_length_is_qn'])
+    check('real-copy-online-pcm24-96khz', readback['source_online'] is True and readback['source_sample_rate'] == 96000 and readback['source_channels'] == 1)
+    reproduction_request = {'item_guid': get_item_identity(reproduction), 'track_guid': recording_track_guid(track), 'start_seconds': 3.125, 'end_seconds': 6.53}
+    baseline = audio_samples(reproduction_take, (3.6, 4.8, 6.0))
+    result = handle_set_item_edges(reproduction_request)
+    (OUT / 'real-copy-result.json').write_text(json.dumps(result, indent=2))
+    check('real-copy-requested-edges', result.get('success') and result['after']['D_POSITION'] == 3.125 and item_edges_close(result['after']['D_LENGTH'], 3.405) and result['after']['end_seconds'] == 6.53 and result['after']['D_STARTOFFS'] == 3.125)
+    check('real-copy-samples-invariant', max(abs(a-b) for a, b in zip(baseline, audio_samples(reproduction_take, (3.6, 4.8, 6.0)))) < 1e-7)
+    check('real-copy-no-repeat', result['after']['B_LOOPSRC'] == 1 and result['verification']['no_source_repeat'])
+    RPR_Undo_DoUndo2(0)
+    reproduction = find_item_by_guid(track, reproduction_request['item_guid'])
+    check('real-copy-undo', item_edges_chunk(reproduction) == original_reproduction)
+    RPR_Undo_DoRedo2(0)
+    reproduction = find_item_by_guid(track, reproduction_request['item_guid'])
+    reproduction_take = RPR_GetTake(reproduction, 0)
+    reproduction_source = RPR_GetMediaItemTake_Source(reproduction_take)
+    check('real-copy-redo', item_edges_close(item_edges_state(reproduction)['D_STARTOFFS'], 3.125))
+    stable = item_edges_chunk(reproduction)
+    invalid = handle_set_item_edges({**reproduction_request, 'end_seconds': 7.6})
+    check('real-copy-overrun-rejected', 'error' in invalid and not invalid['rollback']['attempted'] and stable == item_edges_chunk(reproduction))
+    from ctypes import CFUNCTYPE, c_byte, c_uint64
+    from reaper_python import rpr_getfp, rpr_packp
+    set_online = CFUNCTYPE(None, c_uint64, c_byte)(rpr_getfp('CF_SetMediaSourceOnline'))
+    set_online(rpr_packp('PCM_source*', reproduction_source), False)
+    offline_undo = RPR_Undo_CanUndo2(0)
+    offline_before = item_edges_chunk(reproduction)
+    offline = handle_set_item_edges(reproduction_request)
+    (OUT / 'offline-result.json').write_text(json.dumps(offline, indent=2))
+    check('existing-file-offline-specific-error', offline.get('error_code') == 'source_offline' and offline['before']['source_file_readable'] and offline['before']['source_length'] == 0 and offline['before']['source_online'] is False)
+    check('offline-no-mutation-or-undo', not offline['rollback']['attempted'] and offline_before == item_edges_chunk(reproduction) and offline_undo == RPR_Undo_CanUndo2(0))
+    set_online(rpr_packp('PCM_source*', reproduction_source), True)
+    check('native-source-online-again', item_edges_state(reproduction)['source_length'] == 7.4755625)
+    native_api_exists = RPR_APIExists
+    RPR_APIExists = lambda name: False if name == 'CF_GetMediaSourceOnline' else native_api_exists(name)
+    no_sws = item_edges_state(reproduction)
+    check('online-without-optional-sws', no_sws['source_online'] is None and item_edges_source_error(no_sws) == (None, None))
+    RPR_APIExists = native_api_exists
     check('neighbor-preserved', item_edges_chunk(neighbor) == neighbor_chunk)
     check('other-track-preserved', read_recording_chunk(other) == other_chunk)
     (OUT / 'request.json').write_text(json.dumps(request))
