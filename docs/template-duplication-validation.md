@@ -114,12 +114,12 @@ inserted input ReaEQ was conservatively rejected, while a native JS input FX
 passed full preservation checks. There was no audio audition or render.
 
 Source/deployed bridge hashes match, and the new MCP server advertises the tool.
-The already-running work-session bridge still needs a restart to load the new
-handler; it returned `Unknown command: duplicate_tracks` in the activation check.
-REAPER's running Python scripts use separate contexts, so a finite ReaScript
-cannot replace another script's globals. The registered bridge action was invoked
-through the API, but the old listener remained active. The user was asked whether
-REAPER displayed its task-control termination dialog; interface automation was
-not used. Reconnect the MCP client after restarting the bridge to refresh tools.
+After the user terminated the previous bridge instance, the deployed bridge was
+started through its registered ReaScript action. MCP Inspector called
+`duplicate_tracks` with an intentionally nonexistent GUID: the active handler
+returned its specific GUID-validation error with `isError: true`, confirming
+end-to-end activation without creating tracks. A subsequent MCP project query
+confirmed `session 2 - clips.rpp`, 52 tracks and stopped transport. Reconnect an
+already-connected MCP client if its cached tool list predates this new tool.
 
 WR-023 and WR-028 remain `testing`, pending explicit user acceptance.
