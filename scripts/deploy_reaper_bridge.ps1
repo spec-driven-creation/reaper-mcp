@@ -1,3 +1,4 @@
+$ErrorActionPreference = "Stop"
 $source = Join-Path $PSScriptRoot "..\reaper\mcp_bridge.py"
 $destination = "C:\Users\Usuario\AppData\Roaming\REAPER\Scripts\mcp_bridge.py"
 

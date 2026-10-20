@@ -3,6 +3,8 @@ import re
 import unittest
 import uuid
 import base64
+import difflib
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,7 +17,7 @@ BRIDGE = Path(__file__).parents[1] / "reaper/mcp_bridge.py"
 def load_functions(namespace):
     tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
     functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
-    namespace.update(re=re, uuid=uuid, base64=base64)
+    namespace.update(re=re, uuid=uuid, base64=base64, difflib=difflib, hashlib=hashlib)
     exec(compile(ast.Module(body=functions, type_ignores=[]), str(BRIDGE), "exec"), namespace)
     return namespace
 
@@ -124,6 +126,19 @@ class RecordingTests(unittest.TestCase):
         compare = self.n['comparable_fx_chunk']
         self.assertEqual(compare(source), compare(destination))
         self.assertNotEqual(compare(source, False), compare(destination, False))
+
+    def test_wndrect_is_only_ignored_at_fxchain_level(self):
+        compare = self.n['comparable_fx_chunk']
+        source = '<FXCHAIN\nWNDRECT 10 20 300 400\n<VST test\nWNDRECT 10 20 300 400\n>\n>\n'
+        self.assertEqual(compare(source), compare(source.replace('WNDRECT 10 20 300 400\n', '', 1)))
+        self.assertNotEqual(compare(source), compare(source.replace('300 400\n>','300 401\n>')))
+        self.assertNotEqual(compare(source), compare(source.replace('WNDRECT 10 20 300 400', 'WNDRECT unknown', 1)))
+
+    def test_diagnostics_never_disclose_payloads(self):
+        result = self.n['fx_difference_diagnostics']('<FXCHAIN\nsecret-path-and-payload\n>','<FXCHAIN\nchanged-secret\n>')
+        self.assertEqual(result['differences'][0]['source_line'], 2)
+        self.assertNotIn('secret', str(result))
+        self.assertEqual(len(result['differences'][0]['source']['sha256']), 64)
 
     def test_opaque_state_preset_bypass_wet_and_pins_remain_strict(self):
         source = '<FXCHAIN\n<VST test\nSHOW 1\nFLOAT 1 2 3 4\nopaque_state\n>\nPRESETNAME "My preset"\nBYPASS 0 0 0\nWET 0.37\nPINMAP 1 4\n>\n'

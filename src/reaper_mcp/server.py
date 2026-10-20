@@ -2,6 +2,7 @@ import json
 import socket
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from reaper_mcp.drum_mapping import DrumMappingError, resolve_drum_events
 
@@ -11,6 +12,13 @@ PORT = 8765
 BRIDGE_TIMEOUT = 30
 
 mcp = MCPServer("reaper-mcp")
+
+
+def checked_reaper_command(command: str, **arguments) -> dict:
+    response = send_reaper_command(command, **arguments)
+    if "error" in response or response.get("success") is False:
+        raise ToolError(json.dumps(response, ensure_ascii=False))
+    return response
 
 
 def send_reaper_command(command: str, **arguments) -> dict:
@@ -573,8 +581,24 @@ def copy_track_fx_chain(
     source_track_guid: str | None = None, track_guid: str | None = None
 ) -> dict:
     """Copy complete normal FX state and channel count to an FX-empty track, excluding automation; rollback on failure."""
-    return send_reaper_command("copy_track_fx_chain", source_track_index=source_track_index,
+    return checked_reaper_command("copy_track_fx_chain", source_track_index=source_track_index,
         track_index=track_index, source_track_guid=source_track_guid, track_guid=track_guid)
+
+
+@mcp.tool()
+def duplicate_tracks(
+    source_track_guid: str, new_name: str,
+    include_descendants: bool = False, include_items: bool = False,
+    descendant_names: dict[str, str] | None = None,
+    insert_before_track_guid: str | None = None,
+    preserve_record_arm: bool = False, preserve_solo: bool = False
+) -> dict:
+    """Duplicate a track or complete folder with new GUIDs; omit external routing/hardware and items by default. Insert at a top-level boundary or append. Audio files are shared."""
+    return checked_reaper_command(
+        "duplicate_tracks", source_track_guid=source_track_guid, new_name=new_name,
+        include_descendants=include_descendants, include_items=include_items,
+        descendant_names=descendant_names, insert_before_track_guid=insert_before_track_guid,
+        preserve_record_arm=preserve_record_arm, preserve_solo=preserve_solo)
 
 
 @mcp.tool()

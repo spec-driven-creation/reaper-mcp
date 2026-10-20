@@ -6,6 +6,8 @@ import math
 import re
 import uuid
 import base64
+import difflib
+import hashlib
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -4352,7 +4354,7 @@ def comparable_fx_chunk(chunk, ignore_instance_identity=True):
     output, depth = [], 0
     for line in chunk.splitlines():
         text = line.strip()
-        window_record = re.fullmatch(r"(?:FLOAT|FLOATPOS) -?\d+ -?\d+ -?\d+ -?\d+", text)
+        window_record = re.fullmatch(r"(?:FLOAT|FLOATPOS|WNDRECT) -?\d+ -?\d+ -?\d+ -?\d+", text)
         selection_record = re.fullmatch(r"(?:SHOW|LASTSEL) -?\d+", text)
         identity_record = ignore_instance_identity and text.startswith("FXID ")
         if not (depth == 1 and (window_record or selection_record or identity_record)):
@@ -4410,7 +4412,7 @@ def read_vst_copy_state(track, index):
             "wet": RPR_TrackFX_GetParamNormalized(track, index, wet) if wet >= 0 else None}
 
 
-def verify_copied_fx_state(src, dst, source_fx, destination_fx):
+def verify_copied_fx_state(src, dst, source_fx, destination_fx, fx_index_offset=0):
     source = comparable_fx_chunk(source_fx).splitlines()
     destination = comparable_fx_chunk(destination_fx).splitlines()
     if source == destination:
@@ -4436,11 +4438,32 @@ def verify_copied_fx_state(src, dst, source_fx, destination_fx):
                 return False, []
         except (ValueError, UnicodeError):
             return False, []
-        source_state = read_vst_copy_state(src, effect)
-        if source_state is None or source_state != read_vst_copy_state(dst, effect):
+        source_state = read_vst_copy_state(src, effect | fx_index_offset)
+        if source_state is None or source_state != read_vst_copy_state(dst, effect | fx_index_offset):
             return False, []
         normalized.add(effect + 1)
     return True, sorted(normalized)
+
+
+def fx_difference_diagnostics(source_fx, destination_fx):
+    """Locations, lengths and hashes only; never expose plugin payloads or paths."""
+    a = comparable_fx_chunk(source_fx).splitlines()
+    b = comparable_fx_chunk(destination_fx).splitlines()
+    differences = []
+    for tag, i, j, k, l in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        def summary(lines):
+            value = "\n".join(lines).encode("utf-8")
+            return {"lines": len(lines), "bytes": len(value),
+                    "sha256": hashlib.sha256(value).hexdigest()}
+        differences.append({"kind": tag, "source_line": i + 1,
+                            "destination_line": k + 1,
+                            "source": summary(a[i:j]), "destination": summary(b[k:l])})
+        if len(differences) == 16:
+            break
+    return {"source_lines": len(a), "destination_lines": len(b),
+            "differences": differences, "limit": 16}
 
 
 def handle_copy_track_fx_chain(request):
@@ -4469,6 +4492,7 @@ def handle_copy_track_fx_chain(request):
         source_count = RPR_TrackFX_GetCount(src)
     except Exception as error:
         return {"error": str(error)}
+    diagnostics = None
     RPR_Undo_BeginBlock2(0)
     try:
         if not RPR_SetMediaTrackInfo_Value(dst, "I_NCHAN", channels):
@@ -4479,6 +4503,8 @@ def handle_copy_track_fx_chain(request):
                 raise RuntimeError(f"REAPER failed to copy FX {index + 1}")
         applied = read_recording_chunk(dst)
         fx_verified, normalized_labels = verify_copied_fx_state(src, dst, fx, recording_fx_chunk(applied))
+        if not fx_verified:
+            diagnostics = fx_difference_diagnostics(fx, recording_fx_chunk(applied))
         verification = {
             "identity": recording_track_guid(dst) == destination["track_guid"],
             "fx_count": RPR_TrackFX_GetCount(dst) == source_count,
@@ -4510,7 +4536,12 @@ def handle_copy_track_fx_chain(request):
                         == original.replace(recording_fx_chunk(original), "", 1))
         except Exception:
             restored = False
-        return {"error": str(error), "rollback_succeeded": restored}
+        try:
+            source_unchanged = comparable_recording_source(read_recording_chunk(src)) == comparable_recording_source(source_before)
+        except Exception:
+            source_unchanged = False
+        return {"error": str(error), "rollback_succeeded": restored,
+                "source_unchanged": source_unchanged, "diagnostics": diagnostics}
     finally:
         RPR_Undo_EndBlock2(0, "Copy track FX chain", -1)
 
@@ -4530,7 +4561,324 @@ def handle_save_project(request):
     return result
 
 
+
+def template_tracks():
+    return [RPR_GetTrack(0, i) for i in range(RPR_CountTracks(0))]
+
+
+def template_track_by_guid(guid):
+    if not isinstance(guid, str) or not guid.strip():
+        raise ValueError('A non-blank track GUID is required')
+    matches = [t for t in template_tracks() if recording_track_guid(t) == guid]
+    if len(matches) != 1:
+        raise ValueError('Track GUID does not identify exactly one track')
+    return matches[0]
+
+
+def template_object_guids(tracks):
+    identities = []
+    for track in tracks:
+        identities.append(recording_track_guid(track))
+        for i in range(RPR_TrackFX_GetCount(track)):
+            identities.append(RPR_TrackFX_GetFXGUID(track, i))
+        for i in range(RPR_TrackFX_GetRecCount(track)):
+            identities.append(RPR_TrackFX_GetFXGUID(track, i | 0x1000000))
+        for i in range(RPR_CountTrackMediaItems(track)):
+            item = RPR_GetTrackMediaItem(track, i)
+            identities.append(RPR_GetSetMediaItemInfo_String(item, 'GUID', '', False)[3])
+            for j in range(RPR_CountTakes(item)):
+                take = RPR_GetTake(item, j)
+                identities.append(RPR_GetSetMediaItemTakeInfo_String(take, 'GUID', '', False)[3])
+                for k in range(RPR_TakeFX_GetCount(take)):
+                    identities.append(RPR_TakeFX_GetFXGUID(take, k))
+    return identities
+
+
+def template_source_snapshot(track):
+    # Receive indices move when tracks are inserted. Resolve only top-level
+    # AUXRECV source indices to GUIDs; never replace text inside plugin data.
+    lines, depth, output = read_recording_chunk(track).splitlines(), 0, []
+    tracks = template_tracks()
+    for line in lines:
+        text = line.strip()
+        if depth == 1 and text.startswith('SEL '):
+            continue
+        if depth == 1 and text.startswith('AUXRECV '):
+            fields = text.split()
+            fields[1] = recording_track_guid(tracks[int(fields[1])])
+            line = ' '.join(fields)
+        output.append(line)
+        depth += int(text.startswith('<')) - int(text == '>')
+    return comparable_recording_source('\n'.join(output))
+
+
+def template_internal_routes(tracks):
+    guids = {recording_track_guid(t) for t in tracks}
+    result = []
+    attributes = ('D_VOL', 'D_PAN', 'B_MUTE', 'B_PHASE', 'B_MONO',
+                  'I_SENDMODE', 'I_SRCCHAN', 'I_DSTCHAN', 'I_MIDIFLAGS', 'I_AUTOMODE')
+    for track in tracks:
+        for i in range(RPR_GetTrackNumSends(track, 0)):
+            target = template_route_peer(track, 0, i, 'P_DESTTRACK')
+            target_guid = recording_track_guid(target)
+            if target_guid in guids:
+                result.append((recording_track_guid(track), target_guid,
+                               tuple(RPR_GetTrackSendInfo_Value(track, 0, i, a) for a in attributes)))
+    return sorted(result)
+
+
+def template_route_peer(track, category, index, attribute):
+    # P_DESTTRACK uses UI send order (hardware outputs first) in REAPER 7.75,
+    # unlike numeric send attributes. The Python wrapper returns the address as
+    # a double; passing that float onward silently packs a null pointer.
+    if category == 0 and attribute == 'P_DESTTRACK':
+        index += RPR_GetTrackNumSends(track, 1)
+    raw = RPR_GetTrackSendInfo_Value(track, category, index, attribute)
+    if not math.isfinite(raw) or not 0 < raw < 2 ** 53 or raw != int(raw):
+        raise RuntimeError('REAPER returned an invalid routing track pointer')
+    matches = [peer for peer in template_tracks()
+               if int(peer.rsplit('0x', 1)[1], 16) == int(raw)]
+    if len(matches) != 1:
+        raise RuntimeError('Routing track pointer did not resolve uniquely in this project')
+    return matches[0]
+
+
+def template_residual(chunk, include_items):
+    # Structural filtering only. Preserve every unknown record and opaque byte.
+    for block in ('FXCHAIN', 'FXCHAIN_REC'):
+        span = chunk_block_span(chunk, block)
+        if span:
+            chunk = chunk[:span[0]] + chunk[span[1]:]
+    if not include_items:
+        while True:
+            span = chunk_block_span(chunk, 'ITEM')
+            if not span:
+                break
+            chunk = chunk[:span[0]] + chunk[span[1]:]
+    output, stack = [], []
+    for line in chunk.splitlines():
+        text = line.strip()
+        key = text.split(' ', 1)[0]
+        if len(stack) == 1 and key in ('NAME', 'TRACKID', 'SEL', 'AUXRECV', 'HWOUT', 'ISBUS'):
+            continue
+        if len(stack) == 1 and key == 'REC':
+            fields = text.split(); fields[1:3] = ['ARM', 'INPUT']; line = ' '.join(fields)
+        if len(stack) == 1 and key == 'MUTESOLO':
+            fields = text.split(); fields[2] = 'SOLO'; line = ' '.join(fields)
+        if stack and stack[-1] in ('ITEM', 'TAKE', 'FXCHAIN', 'TAKEFX') and key in ('IGUID', 'GUID', 'FXID'):
+            line = key + ' IDENTITY'
+        output.append(line)
+        if text.startswith('<'):
+            stack.append(text[1:].split(' ', 1)[0])
+        elif text == '>':
+            stack.pop()
+    return '\n'.join(output)
+
+
+def handle_duplicate_tracks(request):
+    created, before_tracks = [], template_tracks()
+    try:
+        if RPR_GetPlayState() != 0:
+            raise ValueError('Stop playback/recording before duplicating templates')
+        source = template_track_by_guid(request.get('source_track_guid'))
+        for key in ('include_descendants', 'include_items', 'preserve_record_arm', 'preserve_solo'):
+            if type(request.get(key, False)) is not bool:
+                raise ValueError(key + ' must be boolean')
+        name = request.get('new_name')
+        names = request.get('descendant_names')
+        if names is None:
+            names = {}
+        if not isinstance(names, dict):
+            raise ValueError('descendant_names must map source GUIDs to names')
+        if any(not isinstance(v, str) or not v.strip() or '\n' in v or '\r' in v or '\0' in v for v in [name, *names.values()]):
+            raise ValueError('Names must be non-blank single-line strings')
+        start = before_tracks.index(source)
+        sources = [source]
+        folder = int(RPR_GetMediaTrackInfo_Value(source, 'I_FOLDERDEPTH'))
+        if folder == 1:
+            if not request.get('include_descendants', False):
+                raise ValueError('Folder sources require include_descendants=true')
+            depth = 1
+            for track in before_tracks[start + 1:]:
+                sources.append(track)
+                depth += int(RPR_GetMediaTrackInfo_Value(track, 'I_FOLDERDEPTH'))
+                if depth <= 0:
+                    break
+            if depth != 0:
+                raise ValueError('Folder must have a balanced complete subtree')
+        elif request.get('include_descendants', False):
+            raise ValueError('include_descendants requires a folder source')
+        source_guids = [recording_track_guid(t) for t in sources]
+        if any(k not in source_guids[1:] for k in names):
+            raise ValueError('descendant_names keys must identify descendants of the source')
+        anchor_guid = request.get('insert_before_track_guid')
+        anchor = template_track_by_guid(anchor_guid) if anchor_guid is not None else None
+        if anchor and RPR_GetTrackDepth(anchor) != 0:
+            raise ValueError('Insertion must be before a top-level track or at project end')
+        snapshots = {recording_track_guid(t): template_source_snapshot(t) for t in before_tracks}
+        original_ids = set(template_object_guids(before_tracks))
+        chunks = [read_recording_chunk(t) for t in sources]
+        original_depths = {recording_track_guid(t): RPR_GetMediaTrackInfo_Value(t, 'I_FOLDERDEPTH') for t in before_tracks}
+        # Reject unsupported modulation before native duplication can retarget it.
+        for chunk in chunks:
+            for block in ('FXCHAIN', 'FXCHAIN_REC'):
+                span = chunk_block_span(chunk, block)
+                fx = chunk[slice(*span)] if span else ''
+                if comparable_fx_chunk(portable_fx_chunk(fx)) != comparable_fx_chunk(fx):
+                    raise ValueError('FX parameter automation/modulation is unsupported for template duplication')
+        routes = template_internal_routes(sources)
+        selection = [t for t in before_tracks if RPR_IsTrackSelected(t)]
+    except Exception as error:
+        return {'error': str(error)}
+    RPR_Undo_BeginBlock2(0)
+    RPR_PreventUIRefresh(1)
+    try:
+        for track in before_tracks:
+            RPR_SetTrackSelected(track, track in sources)
+        RPR_Main_OnCommand(40062, 0)  # Track: Duplicate tracks (native full state).
+        created = [t for t in template_tracks() if recording_track_guid(t) not in snapshots]
+        if len(created) != len(sources):
+            raise RuntimeError('Native duplication created an unexpected track count')
+        # Native duplication of a folder-closing normal track transfers the
+        # closing flag to its copy. Restore that known structural side effect
+        # before moving the standalone copy out of the source folder.
+        for track in before_tracks:
+            depth = original_depths[recording_track_guid(track)]
+            if RPR_GetMediaTrackInfo_Value(track, 'I_FOLDERDEPTH') != depth:
+                RPR_SetMediaTrackInfo_Value(track, 'I_FOLDERDEPTH', depth)
+        if folder != 1:
+            RPR_SetMediaTrackInfo_Value(created[0], 'I_FOLDERDEPTH', 0)
+        mapping = dict(zip(source_guids, [recording_track_guid(t) for t in created]))
+        if len(set(mapping.values())) != len(created):
+            raise RuntimeError('Duplicate track GUIDs are not unique')
+        warnings = []
+        created_guids = set(mapping.values())
+        for src, dst in zip(sources, created):
+            # Remove both outgoing and incoming external connections. Removing a
+            # receive also removes its matching send on the outside source.
+            for category, pointer in ((0, 'P_DESTTRACK'), (-1, 'P_SRCTRACK')):
+                for i in reversed(range(RPR_GetTrackNumSends(dst, category))):
+                    peer = template_route_peer(dst, category, i, pointer)
+                    if recording_track_guid(peer) not in created_guids:
+                        # REAPER 7.75 RemoveTrackSend category 0 also indexes
+                        # hardware outputs before sends, unlike send counts.
+                        remove_index = i + RPR_GetTrackNumSends(dst, 1) if category == 0 else i
+                        if not RPR_RemoveTrackSend(dst, category, remove_index):
+                            raise RuntimeError('Failed to remove external routing')
+            for i in reversed(range(RPR_GetTrackNumSends(dst, 1))):
+                if not RPR_RemoveTrackSend(dst, 1, i):
+                    raise RuntimeError('Failed to remove hardware output')
+            if not request.get('include_items', False):
+                for i in reversed(range(RPR_CountTrackMediaItems(dst))):
+                    if not RPR_DeleteTrackMediaItem(dst, RPR_GetTrackMediaItem(dst, i)):
+                        raise RuntimeError('Failed to exclude media item')
+            guid = recording_track_guid(src)
+            target_name = name if src == source else names.get(guid, RPR_GetTrackName(src, '', 512)[2])
+            RPR_GetSetMediaTrackInfo_String(dst, 'P_NAME', target_name, True)
+            for key, option in (('I_RECARM', 'preserve_record_arm'), ('I_SOLO', 'preserve_solo')):
+                expected = RPR_GetMediaTrackInfo_Value(src, key) if request.get(option, False) else 0
+                RPR_SetMediaTrackInfo_Value(dst, key, expected)
+                if RPR_GetMediaTrackInfo_Value(dst, key) != expected:
+                    raise RuntimeError('Failed to apply ' + key)
+            if RPR_GetTrackName(dst, '', 512)[2] != target_name:
+                raise RuntimeError('Track name read-back failed')
+            requested = int(RPR_GetMediaTrackInfo_Value(src, 'I_RECINPUT'))
+            effective = int(RPR_GetMediaTrackInfo_Value(dst, 'I_RECINPUT'))
+            if requested != effective or not describe_record_input(requested)['available']:
+                warnings.append({'track_guid': recording_track_guid(dst), 'warning': 'Recording input unavailable or changed',
+                                 'requested_record_input_raw': requested, 'effective_record_input_raw': effective})
+        expected_routes = sorted((mapping[a], mapping[b], values) for a, b, values in routes)
+        if template_internal_routes(created) != expected_routes:
+            raise RuntimeError('Internal routing was not faithfully remapped by native duplication')
+        # Normalize a closing source track to a standalone normal track.
+        if folder != 1:
+            RPR_SetMediaTrackInfo_Value(created[0], 'I_FOLDERDEPTH', 0)
+        for track in template_tracks():
+            RPR_SetTrackSelected(track, track in created)
+        before_index = int(RPR_GetMediaTrackInfo_Value(anchor, 'IP_TRACKNUMBER')) - 1 if anchor else RPR_CountTracks(0)
+        if not RPR_ReorderSelectedTracks(before_index, 0):
+            raise RuntimeError('Failed to apply insertion position')
+        if template_internal_routes(created) != expected_routes:
+            raise RuntimeError('Internal routing changed during insertion')
+        final_tracks = template_tracks()
+        first = final_tracks.index(created[0])
+        if final_tracks[first:first + len(created)] != created:
+            raise RuntimeError('Created track order is not contiguous')
+        if (anchor and first + len(created) != final_tracks.index(anchor)) or (not anchor and first + len(created) != len(final_tracks)):
+            raise RuntimeError('Insertion position read-back failed')
+        for src, dst, chunk in zip(sources, created, chunks):
+            applied = read_recording_chunk(dst)
+            for category, pointer in ((0, 'P_DESTTRACK'), (-1, 'P_SRCTRACK')):
+                for i in range(RPR_GetTrackNumSends(dst, category)):
+                    peer = template_route_peer(dst, category, i, pointer)
+                    if recording_track_guid(peer) not in created_guids:
+                        raise RuntimeError('External routing removal read-back failed: ' + json.dumps({
+                            'track_guid': recording_track_guid(dst), 'category': category,
+                            'routing_index': i, 'peer_guid': recording_track_guid(peer)}))
+            if RPR_GetTrackNumSends(dst, 1):
+                raise RuntimeError('Hardware output removal read-back failed')
+            if not request.get('include_items', False) and RPR_CountTrackMediaItems(dst):
+                raise RuntimeError('Media item exclusion read-back failed')
+            if template_residual(chunk, request.get('include_items', False)) != template_residual(applied, request.get('include_items', False)):
+                raise RuntimeError('Full non-FX track state verification failed')
+            a, b = recording_fx_chunk(chunk), recording_fx_chunk(applied)
+            if RPR_TrackFX_GetCount(src) != RPR_TrackFX_GetCount(dst) or not verify_copied_fx_state(src, dst, a, b)[0]:
+                raise RuntimeError('Full FX state verification failed: ' + json.dumps(fx_difference_diagnostics(a, b)))
+            def input_fx(value):
+                span = chunk_block_span(value, 'FXCHAIN_REC')
+                return value[slice(*span)] if span else ''
+            if not verify_copied_fx_state(src, dst, input_fx(chunk), input_fx(applied), 0x1000000)[0]:
+                raise RuntimeError('Full input FX state verification failed')
+            expected_depth = int(RPR_GetMediaTrackInfo_Value(src, 'I_FOLDERDEPTH')) if folder == 1 else 0
+            if RPR_GetMediaTrackInfo_Value(dst, 'I_FOLDERDEPTH') != expected_depth:
+                raise RuntimeError('Folder hierarchy verification failed')
+        new_ids = template_object_guids(created)
+        if any(not value or value in original_ids for value in new_ids) or len(set(new_ids)) != len(new_ids):
+            raise RuntimeError('Copied track/FX/item/take identities are not new and unique')
+        if any(template_source_snapshot(t) != snapshots[recording_track_guid(t)] for t in before_tracks):
+            raise RuntimeError('Existing track/source state changed')
+        return {'success': True, 'created_tracks': [
+            {'source_track_guid': s, 'track_guid': recording_track_guid(t),
+             'track_index': int(RPR_GetMediaTrackInfo_Value(t, 'IP_TRACKNUMBER')),
+             'name': RPR_GetTrackName(t, '', 512)[2]} for s, t in zip(source_guids, created)],
+            'warnings': warnings, 'source_unchanged': True, 'verified_full_state': True,
+            'external_routing': 'omitted', 'hardware_outputs': 'omitted',
+            'main_send': 'preserved to duplicated parent or master at top level',
+            'media_sources': 'shared; no physical files copied or modified'}
+    except Exception as error:
+        # Discover even partially-created tracks if the native action raised.
+        rollback_errors = []
+        created = [t for t in template_tracks() if recording_track_guid(t) not in snapshots]
+        for track in reversed(created):
+            try:
+                RPR_DeleteTrack(track)
+            except Exception as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        for track in before_tracks:
+            try:
+                depth = original_depths[recording_track_guid(track)]
+                if RPR_GetMediaTrackInfo_Value(track, 'I_FOLDERDEPTH') != depth:
+                    RPR_SetMediaTrackInfo_Value(track, 'I_FOLDERDEPTH', depth)
+            except Exception as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        try:
+            unchanged = all(template_source_snapshot(t) == snapshots[recording_track_guid(t)] for t in before_tracks)
+            restored = len(template_tracks()) == len(before_tracks) and unchanged
+        except Exception:
+            unchanged, restored = False, False
+        return {'error': str(error), 'rollback_succeeded': restored, 'source_unchanged': unchanged,
+                'warnings': locals().get('warnings', []), 'rollback_errors': rollback_errors}
+    finally:
+        for track in template_tracks():
+            RPR_SetTrackSelected(track, track in selection)
+        RPR_PreventUIRefresh(-1)
+        RPR_TrackList_AdjustWindows(False)
+        RPR_UpdateArrange()
+        RPR_Undo_EndBlock2(0, 'Duplicate template tracks', -1)
+
+
 COMMAND_HANDLERS = {
+    "duplicate_tracks": handle_duplicate_tracks,
     "get_track_color": handle_get_track_color,
     "set_track_color": handle_set_track_color,
     "copy_track_fx_chain": handle_copy_track_fx_chain,

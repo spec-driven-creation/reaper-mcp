@@ -1265,7 +1265,7 @@
       "id": "WR-023",
       "category": "mutation",
       "title": "Copy complete FX state into empty destination with verification and rollback",
-      "status": "completed",
+      "status": "testing",
       "priority": "high",
       "capability": "copy_track_fx_chain",
       "description": "Copy complete FX state into empty destination with verification and rollback",
@@ -1297,6 +1297,13 @@
           "discovered_during": "runtime-validation",
           "validation_notes": "Correction implemented and validated in both captured chains, the original live Sketch Piano snapshot, injected sonic/partial failures and guarded FiruletMap completion. FLOAT rectangles are scoped UI metadata; the empty VST2 wrapper label is accepted only with unchanged serialized remainder and exact native chunk and musical API state. Explicitly accepted by the user on 2026-10-15; see docs/fx-copy-regression.md.",
           "fixed_in": "d985c3ec9c06ef9694a1fa096cb60e9a93221adb"
+        },
+        {
+          "id": "BUG-019",
+          "description": "FM-009/FM-010 native FX copy fails strict state verification; diagnose bounded structural differences and preserve full plugin state.",
+          "status": "fixed",
+          "discovered_during": "runtime-validation",
+          "validation_notes": "Isolated REAPER 7.75 reproduction for FM-009/FM-010 proved WNDRECT was the only remaining serialized difference. Scoped chain-window normalization passed all three chains, partial-copy rollback and strict payload regressions."
         }
       ]
     },
@@ -1363,6 +1370,25 @@
         "Delete only the resolved item, verify GUID absence and return the deleted GUID, track identity and active project identity.",
         "Use one Undo step and update the arrangement without changing selection of surviving items, cursor, transport, tempo or neighboring items.",
         "Validate seconds creation at 0, 1.5, 3 and 4.5 seconds, legacy measures, failures, deletion and real host Undo in an isolated temporary project."
+      ],
+      "bugs": []
+    },
+    {
+      "id": "WR-028",
+      "category": "mutation",
+      "title": "Duplicate GUID-identified track or complete folder safely",
+      "status": "testing",
+      "priority": "high",
+      "capability": "duplicate_tracks",
+      "description": "Native duplication with explicit insertion, descendant names, media policy and isolated routing.",
+      "depends_on": [
+        "WR-023"
+      ],
+      "acceptance_criteria": [
+        "Duplicate normal track or complete folder with new identities and full FX state.",
+        "Preserve internal routing, omit external routing and hardware outputs, default copies unarmed and unsoloed.",
+        "Support items exclusion and explicit GUID descendant names and insertion.",
+        "Verify source preservation and operation-local rollback in isolated host project."
       ],
       "bugs": []
     }

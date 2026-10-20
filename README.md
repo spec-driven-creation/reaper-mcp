@@ -137,7 +137,8 @@ other destination properties are preserved. Full FX state and non-FX destination
 state are compared after writing; a failed write or mismatch restores and checks
 the original destination snapshot (`rollback_succeeded` in errors). The source
 is never written. Only chain-level FX instance GUIDs and recognized window or
-selection records (`FLOAT`, `FLOATPOS`, `SHOW`, `LASTSEL`) are excluded from
+selection records (`FLOAT`, `FLOATPOS`, `WNDRECT`, `SHOW`, `LASTSEL`) are
+excluded from
 comparisons. Matching text inside opaque plugin state remains byte-exact;
 unknown records and plugin-state whitespace remain significant. REAPER can
 update the source FX window selection.
@@ -534,3 +535,63 @@ for runtime behavior; the README does not duplicate the full backlog.
   REAPER provides them; it does not enumerate every preset name.
 - The TCP bridge is local, single-request, and tied to the active REAPER project;
   the ReaScript must be running for all REAPER-backed tools.
+
+### Duplicate a track or complete folder
+
+`duplicate_tracks(source_track_guid, new_name, include_descendants=False,
+include_items=False, descendant_names=None, insert_before_track_guid=None,
+preserve_record_arm=False, preserve_solo=False)` uses REAPER's native
+**Track: Duplicate tracks** action, preserving opaque plugin state rather than
+rebuilding tracks or replacing GUID text in chunks. Sources use GUIDs, never
+mutable indices. Folder sources require `include_descendants=True` and a balanced
+complete subtree. Nested descendants retain their order and hierarchy.
+
+`descendant_names` maps source descendant GUIDs to explicit new names; omitted
+names stay unchanged. Insert before an existing top-level track GUID, or append
+when the insertion GUID is omitted. The copies form a contiguous top-level block.
+Normal tracks copied out of a folder become standalone tracks.
+
+Normal and input FX, colors, volume, pan, mute, channels, recording configuration,
+input and monitoring are preserved and read back. Copies are unarmed and without
+solo unless the corresponding `preserve_*` option is explicitly true. Missing
+recording inputs produce warnings containing both `requested_record_input_raw`
+and `effective_record_input_raw`; a stored raw number does not imply that the
+current device offers that input.
+
+Internal sends/receives must be remapped by native duplication to the corresponding
+copies, retaining send settings. External sends, external receives and hardware
+outputs are removed from the copies; no option silently preserves those links.
+The main/parent send remains enabled when enabled in the source: it feeds the
+copied parent inside the subtree, or the master for a top-level copy. Stop
+playback/recording before this operation. REAPER may create temporary external
+connections during its synchronous native action; these are removed and verified
+before returning.
+
+Items are excluded by default. With `include_items=True`, native duplication
+preserves items and takes with new object GUIDs. Audio references the same source
+files; no physical media files are copied, written or deleted. Native MIDI pooling
+and other shared media semantics remain in effect.
+
+The result includes `created_tracks` in source order, each with
+`source_track_guid`, new `track_guid`, final one-based `track_index` and `name`,
+plus warnings and verification flags. Track, FX, item and take GUIDs must be new
+and unique. Source and all pre-existing track snapshots are compared after the
+operation. Selection is restored. One Undo step covers the operation; failure
+removes only newly created tracks and reports `rollback_succeeded` and
+`source_unchanged`, without applying a global Undo or overwriting originals.
+
+Both `copy_track_fx_chain` and `duplicate_tracks` expose bridge failures as MCP
+`isError: true`, retaining JSON diagnostics in the error text. FX mismatch
+diagnostics contain normalized source/destination line locations, lengths and
+SHA256 digests, capped at 16 changed ranges, never payload text or media paths.
+Copy failures independently check source preservation after rollback.
+
+Limitations: the Python track snapshot limit is 4 MiB. FX parameter automation,
+modulation and parameter links remain rejected before mutation, including on
+template input FX; track automation is retained by native duplication. Unknown
+serialization differences remain errors with rollback. A plugin whose native
+copy changes its preset API state (including some freshly inserted VST defaults)
+can still be conservatively rejected. There is no blanket binary-state exception.
+External routing with associated automation may also be conservatively rejected
+when removal changes otherwise verified state. Audio equivalence is not auditioned.
+Restart the deployed bridge and reconnect the MCP server after adding a tool.
