@@ -1391,6 +1391,26 @@
         "Verify source preservation and operation-local rollback in isolated host project."
       ],
       "bugs": []
+    },
+    {
+      "id": "WR-029",
+      "category": "mutation",
+      "title": "Set audio item edges without moving source samples",
+      "status": "testing",
+      "priority": "high",
+      "capability": "set_item_edges",
+      "description": "GUID-targeted absolute audio edges with source offset compensation, strict supported-state validation, verified preservation and rollback.",
+      "depends_on": [
+        "RO-003"
+      ],
+      "acceptance_criteria": [
+        "Resolve unique project item GUID and explicit track identity before writing.",
+        "Reject unsupported audio mappings, invalid ranges, unavailable source, locks and insufficient source without clamping or loops.",
+        "Preserve sample project times at constant take rates, unrelated state and omitted fades; verify actual values and serialized residual.",
+        "Use one native Undo step, operation-local verified rollback and MCP isError on failures.",
+        "Validate isolated host WAV edges, rate 1 and another constant rate, failures, Undo/Redo and injected rollback; do not modify real recordings."
+      ],
+      "bugs": []
     }
   ]
 }

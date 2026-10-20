@@ -18,6 +18,68 @@ JSON with `127.0.0.1:8765`. It never calls REAPER APIs directly. The bridge in
 `reaper/mcp_bridge.py` runs inside REAPER, owns every `RPR_*` call, validates
 REAPER targets, and reads or mutates the project.
 
+## Audio item edge editing
+
+`set_item_edges(item_guid, start_seconds, end_seconds, track_guid=None,
+track_index=None, fade_in_seconds=None, fade_out_seconds=None)` changes absolute
+project boundaries of one GUID-identified audio item. Supply a track GUID or a
+one-based track index; supplying both also checks that they identify the same
+track. The item GUID must be unique across the active project and belong to that
+track. The active project must be stopped. This tool uses REAPER APIs only.
+
+```json
+{
+  "item_guid": "{ITEM-GUID}",
+  "track_guid": "{TRACK-GUID}",
+  "start_seconds": 12.5,
+  "end_seconds": 18.25
+}
+```
+
+For constant take rate `r`, the bridge writes `D_POSITION = start_seconds`,
+`D_LENGTH = end_seconds - start_seconds`, and
+`D_STARTOFFS = old_offset + (start_seconds - old_position) * r`. It preserves
+the project time of existing source samples, rather than moving/slipping,
+quantizing, stretching or changing their pitch or rate. Independent native audio
+accessor comparisons validated this mapping at take rates 1 and 1.5.
+
+The first version supports a single take with a plain file-backed WAV source.
+It rejects MIDI, multiple/absent takes, parent/section/reversed sources, stretch
+markers, take envelopes (including rate-related automation), take FX, automatic
+stretching, project playrate automation and unrecognized master envelopes.
+Missing/unavailable sources, locked items, invalid/nonfinite numbers, negative
+starts or offsets, nonpositive lengths and source overruns fail before mutation.
+Both the old and requested read intervals must fit entirely within the source.
+The existing `B_LOOPSRC` flag is preserved, with a warning when enabled; an
+extension never wraps/repeats audio. Values are never clamped to source bounds.
+
+Omitted manual fades and existing automatic fades are preserved exactly. New
+manual fades must be finite, nonnegative and no longer than the new item. An
+explicit fade is rejected if that edge has a positive automatic fade. Resizing
+also rejects a range too short to preserve existing fade lengths. Fade shape,
+curvature and automatic lengths are verified; durations alone do not establish
+whether a fade affects an attack. No audio attack detection is performed.
+
+One call creates one Undo step named `Set audio item edges preserving sample
+timing`. The bridge captures the complete item chunk before writing and verifies
+identity, source, boundaries, offset, preserved properties and the serialized
+remainder. It checks the source/time mapping at three points of the retained
+interval and its linear intercept (also when the old/new ranges do not overlap).
+Numeric read-back tolerance is 1 nanosecond, with no requested-value adjustment.
+Other items/tracks, FX, recording inputs, MIDI and tempo are never written.
+
+The response includes `before`, `after` (raw REAPER attribute names plus source
+and take identity), `start_delta_seconds`, `end_delta_seconds`,
+`source_offset_delta_seconds`, `verification`, `warnings` and `rollback`.
+On write/verification failure the synchronous handler restores its written
+fields; if necessary it restores only the target item snapshot, verifies complete
+restoration and reports `rollback.attempted`/`rollback.verified`. It refuses to
+restore over a changed target identity. An unrecoverable native restoration
+failure is reported explicitly, never described as successful rollback.
+Failures propagate through MCP with `isError: true`, including rollback details.
+
+See [isolated host and protocol validation](docs/item-edges-validation.md).
+
 ## Requirements
 
 - Python as configured by `.python-version` and `pyproject.toml`.

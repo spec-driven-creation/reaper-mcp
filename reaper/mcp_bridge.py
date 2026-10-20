@@ -4877,7 +4877,231 @@ def handle_duplicate_tracks(request):
         RPR_Undo_EndBlock2(0, 'Duplicate template tracks', -1)
 
 
+def item_edges_chunk(item):
+    size = 4 * 1024 * 1024
+    result = RPR_GetItemStateChunk(item, "", size, False)
+    if not result[0] or len(result[2].encode("utf-8")) >= size - 1:
+        raise RuntimeError("Item state unavailable or exceeds safe chunk limit")
+    return result[2]
+
+
+def item_edges_residual(chunk, fades):
+    # Only normalize authorized numeric tokens at item/take depth, never source/FX data.
+    lines, depth = [], 0
+    for line in chunk.splitlines():
+        fields = line.split()
+        if depth == 1 and fields:
+            if fields[0] in ("POSITION", "LENGTH", "SOFFS"):
+                fields[1] = "<requested>"
+                line = " ".join(fields)
+            elif fields[0] in fades:
+                fields[2] = "<requested>"
+                line = " ".join(fields)
+        lines.append(line)
+        if line.lstrip().startswith("<"):
+            depth += 1
+        elif line.strip() == ">":
+            depth -= 1
+    return "\n".join(lines)
+
+
+def item_edges_state(item):
+    take = RPR_GetTake(item, 0)
+    source = RPR_GetMediaItemTake_Source(take)
+    values = {key: RPR_GetMediaItemInfo_Value(item, key) for key in
+              ("D_POSITION", "D_LENGTH", "D_FADEINLEN", "D_FADEOUTLEN",
+               "D_FADEINLEN_AUTO", "D_FADEOUTLEN_AUTO", "B_LOOPSRC")}
+    values.update({key: RPR_GetMediaItemTakeInfo_Value(take, key) for key in
+                   ("D_STARTOFFS", "D_PLAYRATE", "D_PITCH", "B_PPITCH", "D_VOL", "D_PAN")})
+    values.update(item_guid=get_item_identity(item),
+                  take_guid=RPR_GetSetMediaItemTakeInfo_String(take, "GUID", "", False)[3],
+                  source_file=RPR_GetMediaSourceFileName(source, "", 32768)[1],
+                  source_type=RPR_GetMediaSourceType(source, "", 256)[1],
+                  source_length=RPR_GetMediaSourceLength(source, False)[0])
+    values["end_seconds"] = values["D_POSITION"] + values["D_LENGTH"]
+    return values
+
+
+def item_edges_close(a, b):
+    return math.isfinite(a) and math.isfinite(b) and math.isclose(a, b, rel_tol=0, abs_tol=1e-9)
+
+
+def handle_set_item_edges(request):
+    before, after, identity = None, None, {}
+    try:
+        project, identity = get_active_project_identity()
+        if not RPR_ValidatePtr2(project, project, "ReaProject*") or RPR_GetPlayState() != 0:
+            raise ValueError("An active stopped project is required")
+        tracks = template_tracks()
+        if request.get("track_index") is None:
+            track = template_track_by_guid(request.get("track_guid"))
+            index = tracks.index(track) + 1
+        else:
+            context, error = resolve_recording_track(request)
+            if error:
+                raise ValueError(error["error"])
+            track, index = context["track"], context["track_index"]
+        guid = request.get("item_guid")
+        if not isinstance(guid, str) or not guid.strip():
+            raise ValueError("item_guid must be non-blank")
+        matches = [RPR_GetTrackMediaItem(t, i) for t in tracks
+                   for i in range(RPR_CountTrackMediaItems(t))
+                   if get_item_identity(RPR_GetTrackMediaItem(t, i)) == guid]
+        if len(matches) != 1 or RPR_GetMediaItem_Track(matches[0]) != track:
+            raise ValueError("item_guid must be unique in the project and belong to the indicated track")
+        item = matches[0]
+        identity.update(track_index=index, track_guid=recording_track_guid(track), item_guid=guid)
+        if not RPR_ValidatePtr2(project, item, "MediaItem*"):
+            raise ValueError("Invalid item pointer")
+        for name in ("start_seconds", "end_seconds", "fade_in_seconds", "fade_out_seconds"):
+            value = request.get(name)
+            if value is None and name.startswith("fade_"):
+                continue
+            if type(value) not in (float, int) or not math.isfinite(value) or value < 0:
+                raise ValueError(name + " must be a finite nonnegative number")
+        start, end = request["start_seconds"], request["end_seconds"]
+        length = end - start
+        if not math.isfinite(length) or length <= 0:
+            raise ValueError("end_seconds must be after start_seconds")
+        if int(RPR_GetMediaItemInfo_Value(item, "C_LOCK")) & 1:
+            raise ValueError("Item is locked")
+        if RPR_CountTakes(item) != 1:
+            raise ValueError("Exactly one audio take is supported")
+        take = RPR_GetTake(item, 0)
+        source = RPR_GetMediaItemTake_Source(take)
+        parent = RPR_GetMediaSourceParent(source)
+        if (RPR_TakeIsMIDI(take) or RPR_GetMediaSourceType(source, "", 256)[1] != "WAVE"
+                or not re.search(r"0x0+$", str(parent)) and parent is not None and parent != 0):
+            raise ValueError("Only plain WAV sources are supported; MIDI, sections and reversed sources are rejected")
+        if (RPR_GetTakeNumStretchMarkers(take) != 0 or RPR_CountTakeEnvelopes(take) != 0
+                or RPR_TakeFX_GetCount(take) != 0
+                or RPR_GetMediaItemInfo_Value(item, "C_AUTOSTRETCH") != 0):
+            raise ValueError("Stretch markers, take envelopes/FX and automatic stretching are unsupported")
+        master = RPR_GetMasterTrack(project)
+        for i in range(RPR_CountTrackEnvelopes(master)):
+            envelope = RPR_GetTrackEnvelope(master, i)
+            chunk = RPR_GetEnvelopeStateChunk(envelope, "", 4 * 1024 * 1024, False)
+            if not chunk[0] or len(chunk[2].encode("utf-8")) >= 4 * 1024 * 1024 - 1:
+                raise ValueError("Master envelope state is unavailable")
+            envelope_type = chunk[2].lstrip().split()[0]
+            if envelope_type not in ("<TEMPOENVEX", "<VOLENV2", "<PANENV2", "<WIDTHENV2", "<MUTEENV"):
+                raise ValueError("Project playrate or unrecognized master envelope is unsupported")
+        before = item_edges_state(item)
+        import os
+        if (not os.path.isfile(before["source_file"]) or RPR_GetMediaSourceSampleRate(source) <= 0
+                or RPR_GetMediaSourceNumChannels(source) <= 0
+                or RPR_GetMediaSourceLength(source, False)[2]):
+            raise ValueError("Source unavailable or source length is not in seconds")
+        rate = before["D_PLAYRATE"]
+        offset = before["D_STARTOFFS"] + (start - before["D_POSITION"]) * rate
+        source_end = offset + length * rate
+        if (not all(math.isfinite(v) for v in (rate, offset, source_end, before["source_length"]))
+                or rate <= 0 or offset < 0 or source_end > before["source_length"]):
+            raise ValueError("Requested range exceeds source bounds or requires a negative source offset")
+        if (before["D_STARTOFFS"] < 0 or before["D_STARTOFFS"] + before["D_LENGTH"] * rate > before["source_length"]):
+            raise ValueError("Existing item reads outside the source; looping mapping is unsupported")
+        fades = {}
+        writes = [(False, "D_POSITION", start), (False, "D_LENGTH", length), (True, "D_STARTOFFS", offset)]
+        for name, attribute, token in (("fade_in_seconds", "D_FADEINLEN", "FADEIN"),
+                                        ("fade_out_seconds", "D_FADEOUTLEN", "FADEOUT")):
+            value = request.get(name)
+            if (before[attribute] if value is None else value) > length:
+                raise ValueError("Requested range cannot preserve/apply fade durations exceeding its length")
+            if value is not None:
+                if before[attribute + "_AUTO"] > 0:
+                    raise ValueError("Explicit fades with active automatic fades are unsupported")
+                fades[token] = value
+                writes.append((False, attribute, value))
+        if any(before[k] > length for k in ("D_FADEINLEN_AUTO", "D_FADEOUTLEN_AUTO")):
+            raise ValueError("Requested range cannot preserve automatic fades")
+        snapshot = item_edges_chunk(item)
+        residual = item_edges_residual(snapshot, fades)
+        if get_active_project_identity()[0] != project:
+            raise RuntimeError("Active project changed before mutation")
+    except Exception as error:
+        return {**identity, "error": str(error), "before": before, "after": after,
+                "verification": {}, "warnings": [], "rollback": {"attempted": False}}
+
+    # REAPER runs this handler synchronously on its main thread, without yielding.
+    written, verification = [], {}
+    RPR_Undo_BeginBlock2(project)
+    try:
+        for is_take, attribute, value in writes:
+            written.append((is_take, attribute))
+            setter = RPR_SetMediaItemTakeInfo_Value if is_take else RPR_SetMediaItemInfo_Value
+            if not setter(take if is_take else item, attribute, value):
+                raise RuntimeError("REAPER rejected write: " + attribute)
+        RPR_UpdateItemInProject(item)
+        after = item_edges_state(item)
+        allowed = {attribute for _, attribute, _ in writes} | {"end_seconds"}
+        points = []
+        left, right = max(start, before["D_POSITION"]), min(end, before["end_seconds"])
+        if left < right:
+            for t in (left, (left + right) / 2, right):
+                old = before["D_STARTOFFS"] + (t - before["D_POSITION"]) * rate
+                new = after["D_STARTOFFS"] + (t - after["D_POSITION"]) * after["D_PLAYRATE"]
+                points.append({"project_seconds": t, "before_source_seconds": old,
+                               "after_source_seconds": new, "verified": item_edges_close(old, new)})
+        verification = {
+            "identity": get_active_project_identity()[0] == project and RPR_GetMediaItem_Track(item) == track,
+            "requested_values": all(item_edges_close(after[k], v) for _, k, v in writes)
+                                and item_edges_close(after["end_seconds"], end),
+            "preserved_properties": all(after[k] == v for k, v in before.items() if k not in allowed),
+            "serialized_state_preserved": item_edges_residual(item_edges_chunk(item), fades) == residual,
+            "source_pointer_preserved": RPR_GetMediaItemTake_Source(take) == source,
+            "temporal_mapping": all(p["verified"] for p in points),
+            "mapping_intercept": item_edges_close(
+                before["D_STARTOFFS"] - before["D_POSITION"] * rate,
+                after["D_STARTOFFS"] - after["D_POSITION"] * after["D_PLAYRATE"]),
+            "mapping_points": points,
+            "no_source_repeat": after["D_STARTOFFS"] >= 0 and after["D_STARTOFFS"] + after["D_LENGTH"] * rate <= after["source_length"],
+        }
+        if not all(v for k, v in verification.items() if k != "mapping_points"):
+            raise RuntimeError("Item edge verification failed")
+        return {**identity, "success": True, "before": before, "after": after,
+                "start_delta_seconds": after["D_POSITION"] - before["D_POSITION"],
+                "end_delta_seconds": after["end_seconds"] - before["end_seconds"],
+                "source_offset_delta_seconds": after["D_STARTOFFS"] - before["D_STARTOFFS"],
+                "verification": verification,
+                "warnings": ["Loop flag retained; source interval fits without repetition"] if before["B_LOOPSRC"] else [],
+                "rollback": {"attempted": False}}
+    except Exception as error:
+        rollback = {"attempted": True, "verified": False}
+        try:
+            # Restore only fields written here, never overwrite track/project snapshots.
+            if (get_active_project_identity()[0] != project or not RPR_ValidatePtr2(project, item, "MediaItem*")
+                    or get_item_identity(item) != guid or RPR_GetMediaItemTake_Source(take) != source):
+                raise RuntimeError("Identity changed; refusing to overwrite a different target")
+            for is_take, attribute in reversed(written):
+                setter = RPR_SetMediaItemTakeInfo_Value if is_take else RPR_SetMediaItemInfo_Value
+                if not setter(take if is_take else item, attribute, before[attribute]):
+                    rollback.setdefault("write_errors", []).append(attribute)
+            RPR_UpdateItemInProject(item)
+            after = item_edges_state(item)
+            rollback["verified"] = after == before and item_edges_chunk(item) == snapshot
+            if not rollback["verified"]:
+                # No other REAPER action can interleave in this synchronous handler.
+                # Recover incidental native changes as well, scoped to this one item.
+                if not RPR_SetItemStateChunk(item, snapshot, False):
+                    raise RuntimeError("Item snapshot rollback failed")
+                RPR_UpdateItemInProject(item)
+                after = item_edges_state(item)
+                rollback["snapshot_restored"] = True
+                rollback["verified"] = after == before and item_edges_chunk(item) == snapshot
+        except Exception as rollback_error:
+            rollback["error"] = str(rollback_error)
+        return {**identity, "error": str(error), "before": before, "after": after,
+                "start_delta_seconds": after["D_POSITION"] - before["D_POSITION"] if after else None,
+                "end_delta_seconds": after["end_seconds"] - before["end_seconds"] if after else None,
+                "source_offset_delta_seconds": after["D_STARTOFFS"] - before["D_STARTOFFS"] if after else None,
+                "verification": verification, "warnings": [], "rollback": rollback}
+    finally:
+        RPR_Undo_EndBlock2(project, "Set audio item edges preserving sample timing", 4)
+        RPR_UpdateArrange()
+
+
 COMMAND_HANDLERS = {
+    "set_item_edges": handle_set_item_edges,
     "duplicate_tracks": handle_duplicate_tracks,
     "get_track_color": handle_get_track_color,
     "set_track_color": handle_set_track_color,

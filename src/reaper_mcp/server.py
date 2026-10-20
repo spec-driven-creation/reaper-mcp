@@ -454,6 +454,20 @@ def create_note_item(
     )
 
 @mcp.tool()
+def set_item_edges(
+    item_guid: str, start_seconds: float, end_seconds: float,
+    track_guid: str | None = None, track_index: int | None = None,
+    fade_in_seconds: float | None = None, fade_out_seconds: float | None = None,
+) -> dict:
+    """Set single-take WAV edges preserving sample project times, with verified Undo and rollback."""
+    return checked_reaper_command(
+        "set_item_edges", item_guid=item_guid, track_guid=track_guid, track_index=track_index,
+        start_seconds=start_seconds, end_seconds=end_seconds,
+        fade_in_seconds=fade_in_seconds, fade_out_seconds=fade_out_seconds,
+    )
+
+
+@mcp.tool()
 def delete_item(track_index: int, item_guid: str) -> dict:
     """Delete exactly one GUID-identified item from the explicit track, with Undo and verification."""
     return send_reaper_command("delete_item", track_index=track_index, item_guid=item_guid)
