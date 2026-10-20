@@ -1265,7 +1265,7 @@
       "id": "WR-023",
       "category": "mutation",
       "title": "Copy complete FX state into empty destination with verification and rollback",
-      "status": "testing",
+      "status": "completed",
       "priority": "high",
       "capability": "copy_track_fx_chain",
       "description": "Copy complete FX state into empty destination with verification and rollback",
@@ -1303,7 +1303,7 @@
           "description": "FM-009/FM-010 native FX copy fails strict state verification; diagnose bounded structural differences and preserve full plugin state.",
           "status": "fixed",
           "discovered_during": "runtime-validation",
-          "validation_notes": "Isolated REAPER 7.75 reproduction for FM-009/FM-010 proved WNDRECT was the only remaining serialized difference. Scoped chain-window normalization passed all three chains, partial-copy rollback and strict payload regressions."
+          "validation_notes": "Isolated REAPER 7.75 reproduction for FM-009/FM-010 proved WNDRECT was the only remaining serialized difference. Scoped chain-window normalization passed all three chains, partial-copy rollback and strict payload regressions. Live MCP copies 7 to 11 and 8 to 12 passed full-state verification in session 2 - clips.rpp; source and non-FX destination state were preserved. Explicitly accepted by the user on 2026-10-20."
         }
       ]
     },

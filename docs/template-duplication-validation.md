@@ -122,4 +122,16 @@ end-to-end activation without creating tracks. A subsequent MCP project query
 confirmed `session 2 - clips.rpp`, 52 tracks and stopped transport. Reconnect an
 already-connected MCP client if its cached tool list predates this new tool.
 
-WR-023 and WR-028 remain `testing`, pending explicit user acceptance.
+## Live copy acceptance
+
+After activation, the user requested the actual copies in the work project.
+MCP confirmed empty destinations and copied 7 to 11 (guitar) and 8 to 12 (MIDI).
+Both returned `success: true`, two FX, two channels and `verified_full_state: true`.
+Read-back confirmed the expected FX order, enabled state and online state.
+The bridge verified source preservation and all non-FX destination state.
+Track 11 retained recording input raw `1` (Mic 2); the device availability query
+reported that input unavailable at that moment. No recording input was changed.
+The project was left open with these edits, without an explicit save.
+
+The user explicitly accepted the FX copy behavior on 2026-10-20. WR-023 is now
+`completed`; WR-028 remains `testing`, pending duplication acceptance.
