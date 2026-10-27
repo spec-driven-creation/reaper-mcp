@@ -662,6 +662,22 @@ operation. Selection is restored. One Undo step covers the operation; failure
 removes only newly created tracks and reports `rollback_succeeded` and
 `source_unchanged`, without applying a global Undo or overwriting originals.
 
+The full non-FX comparison permits only one additional native serialization
+default: REAPER 7.83 action 40062 materializes top-level
+`LANEREC -1 -1 -1 0` when the fixed-lane source omits that record. This is
+accepted only for an absent source record, one exact destination record, and
+`FREEMODE 2` on both tracks. Nondefault lane values, duplicate records, other
+modes, nested records and unknown differences are rejected. Successful results
+identify this normalization in `normalized_metadata`. Recording input raw values
+remain part of the strict comparison, even when the device is unavailable.
+
+Duplication verification errors include `diagnostics.source` and
+`diagnostics.destination` with track GUIDs and names. Non-FX mismatches report
+up to 16 differing lines with structural paths, field names and expected/observed
+numeric values for recognized track records. Unknown or nested content is
+represented by byte lengths and SHA256 digests; chunks and opaque plugin data
+are never returned. The `truncated` flag indicates a capped non-FX diagnostic.
+
 Both `copy_track_fx_chain` and `duplicate_tracks` expose bridge failures as MCP
 `isError: true`, retaining JSON diagnostics in the error text. FX mismatch
 diagnostics contain normalized source/destination line locations, lengths and

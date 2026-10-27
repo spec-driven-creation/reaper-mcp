@@ -4662,7 +4662,7 @@ def template_residual(chunk, include_items):
         if len(stack) == 1 and key in ('NAME', 'TRACKID', 'SEL', 'AUXRECV', 'HWOUT', 'ISBUS'):
             continue
         if len(stack) == 1 and key == 'REC':
-            fields = text.split(); fields[1:3] = ['ARM', 'INPUT']; line = ' '.join(fields)
+            fields = text.split(); fields[1] = 'ARM'; line = ' '.join(fields)
         if len(stack) == 1 and key == 'MUTESOLO':
             fields = text.split(); fields[2] = 'SOLO'; line = ' '.join(fields)
         if stack and stack[-1] in ('ITEM', 'TAKE', 'FXCHAIN', 'TAKEFX') and key in ('IGUID', 'GUID', 'FXID'):
@@ -4673,6 +4673,88 @@ def template_residual(chunk, include_items):
         elif text == '>':
             stack.pop()
     return '\n'.join(output)
+
+
+def template_non_fx_comparison(source, destination, include_items):
+    expected = template_residual(source, include_items)
+    observed = template_residual(destination, include_items)
+    def top_records(value, key):
+        depth, records = 0, []
+        for index, line in enumerate(value.splitlines()):
+            text = line.strip()
+            if depth == 1 and text.split(' ', 1)[0] == key:
+                records.append((index, text))
+            depth += int(text.startswith('<')) - int(text == '>')
+        return records
+    normalized = []
+    # REAPER 7.83 native action 40062 materializes this exact implicit default
+    # on the FM-022 fixed-lane track, before item deletion or any other writes.
+    # Accept only absent -> one exact default at TRACK depth in fixed-lane mode.
+    # Nondefault values, duplicates, other modes and nested records remain strict.
+    lane = top_records(observed, 'LANEREC')
+    if (not top_records(expected, 'LANEREC') and len(lane) == 1
+            and lane[0][1] == 'LANEREC -1 -1 -1 0'
+            and [v for _, v in top_records(expected, 'FREEMODE')] == ['FREEMODE 2']
+            and [v for _, v in top_records(observed, 'FREEMODE')] == ['FREEMODE 2']):
+        lines = observed.splitlines()
+        del lines[lane[0][0]]
+        observed = '\n'.join(lines)
+        normalized.append('LANEREC -1 -1 -1 0 (implicit fixed-lane default)')
+    return expected, observed, normalized
+
+
+def template_difference_diagnostics(expected, observed):
+    """Bounded residual diff; expose numeric native records, hash other data."""
+    def records(value):
+        stack, result = [], []
+        for number, line in enumerate(value.splitlines(), 1):
+            text = line.strip()
+            fields = text.split()
+            key = fields[0] if fields else ''
+            field = key if re.fullmatch(r'<?[A-Z][A-Z0-9_]{0,39}|>', key) else '<opaque>'
+            if any(block in ('VST', 'VST3', 'JS', 'CLAP', 'AU', 'LV2', 'DX', 'VIDEO_EFFECT') for block in stack):
+                field = '<opaque>'
+            entry = {'line': number, 'path': '/'.join(stack), 'field': field}
+            # Never print unknown text, file paths, notes or nested plugin data.
+            safe = (len(stack) == 1 and key in (
+                'VOLPAN', 'MUTESOLO', 'REC', 'PEAKCOL', 'BEAT', 'NCHAN',
+                'MAINSEND', 'BUSCOMP', 'SHOWINMIX', 'TRACKHEIGHT', 'VU',
+                'IPHASE', 'PLAYOFFS', 'AUTOMODE', 'PERF', 'MIDIOUT', 'MIDIHWOUT',
+                'LANEREC', 'LANESOLO', 'FIXEDLANES', 'FREEMODE')
+                and all(re.fullmatch(r'[-+0-9.eE]+|ARM|INPUT|SOLO', f) for f in fields[1:]))
+            if safe:
+                entry['value'] = text[:256]
+            else:
+                entry.update(bytes=len(line.encode('utf-8')),
+                             sha256=hashlib.sha256(line.encode('utf-8')).hexdigest())
+            result.append(entry)
+            if text.startswith('<'):
+                stack.append(field[1:] if field.startswith('<') else '<opaque>')
+            elif text == '>' and stack:
+                stack.pop()
+        return result
+    a, b = expected.splitlines(), observed.splitlines()
+    ar, br = records(expected), records(observed)
+    differences = []
+    truncated = False
+    for tag, i, j, k, l in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag == 'equal':
+            continue
+        for offset in range(max(j - i, l - k)):
+            if len(differences) == 16:
+                truncated = True
+                break
+            differences.append({'expected': ar[i + offset] if i + offset < j else None,
+                                'observed': br[k + offset] if k + offset < l else None})
+        if truncated:
+            break
+    return {'differences': differences, 'limit': 16, 'truncated': truncated}
+
+
+def template_pair_identity(source, destination):
+    return {role: {'track_guid': recording_track_guid(track),
+                   'name': RPR_GetTrackName(track, '', 512)[2]}
+            for role, track in (('source', source), ('destination', destination))}
 
 
 def handle_duplicate_tracks(request):
@@ -4751,9 +4833,10 @@ def handle_duplicate_tracks(request):
         mapping = dict(zip(source_guids, [recording_track_guid(t) for t in created]))
         if len(set(mapping.values())) != len(created):
             raise RuntimeError('Duplicate track GUIDs are not unique')
-        warnings = []
+        warnings, normalized_metadata = [], []
         created_guids = set(mapping.values())
         for src, dst in zip(sources, created):
+            diagnostics = template_pair_identity(src, dst)
             # Remove both outgoing and incoming external connections. Removing a
             # receive also removes its matching send on the outside source.
             for category, pointer in ((0, 'P_DESTTRACK'), (-1, 'P_SRCTRACK')):
@@ -4778,9 +4861,13 @@ def handle_duplicate_tracks(request):
             for key, option in (('I_RECARM', 'preserve_record_arm'), ('I_SOLO', 'preserve_solo')):
                 expected = RPR_GetMediaTrackInfo_Value(src, key) if request.get(option, False) else 0
                 RPR_SetMediaTrackInfo_Value(dst, key, expected)
-                if RPR_GetMediaTrackInfo_Value(dst, key) != expected:
+                observed = RPR_GetMediaTrackInfo_Value(dst, key)
+                if observed != expected:
+                    diagnostics['field'] = {'name': key, 'expected': expected, 'observed': observed}
                     raise RuntimeError('Failed to apply ' + key)
-            if RPR_GetTrackName(dst, '', 512)[2] != target_name:
+            observed_name = RPR_GetTrackName(dst, '', 512)[2]
+            if observed_name != target_name:
+                diagnostics['field'] = {'name': 'P_NAME', 'expected': target_name, 'observed': observed_name}
                 raise RuntimeError('Track name read-back failed')
             requested = int(RPR_GetMediaTrackInfo_Value(src, 'I_RECINPUT'))
             effective = int(RPR_GetMediaTrackInfo_Value(dst, 'I_RECINPUT'))
@@ -4807,6 +4894,7 @@ def handle_duplicate_tracks(request):
         if (anchor and first + len(created) != final_tracks.index(anchor)) or (not anchor and first + len(created) != len(final_tracks)):
             raise RuntimeError('Insertion position read-back failed')
         for src, dst, chunk in zip(sources, created, chunks):
+            diagnostics = template_pair_identity(src, dst)
             applied = read_recording_chunk(dst)
             for category, pointer in ((0, 'P_DESTTRACK'), (-1, 'P_SRCTRACK')):
                 for i in range(RPR_GetTrackNumSends(dst, category)):
@@ -4819,15 +4907,21 @@ def handle_duplicate_tracks(request):
                 raise RuntimeError('Hardware output removal read-back failed')
             if not request.get('include_items', False) and RPR_CountTrackMediaItems(dst):
                 raise RuntimeError('Media item exclusion read-back failed')
-            if template_residual(chunk, request.get('include_items', False)) != template_residual(applied, request.get('include_items', False)):
+            expected, observed, normalized = template_non_fx_comparison(chunk, applied, request.get('include_items', False))
+            if normalized:
+                normalized_metadata.append({**diagnostics, 'fields': normalized})
+            if expected != observed:
+                diagnostics['non_fx'] = template_difference_diagnostics(expected, observed)
                 raise RuntimeError('Full non-FX track state verification failed')
             a, b = recording_fx_chunk(chunk), recording_fx_chunk(applied)
             if RPR_TrackFX_GetCount(src) != RPR_TrackFX_GetCount(dst) or not verify_copied_fx_state(src, dst, a, b)[0]:
-                raise RuntimeError('Full FX state verification failed: ' + json.dumps(fx_difference_diagnostics(a, b)))
+                diagnostics['fx'] = fx_difference_diagnostics(a, b)
+                raise RuntimeError('Full FX state verification failed')
             def input_fx(value):
                 span = chunk_block_span(value, 'FXCHAIN_REC')
                 return value[slice(*span)] if span else ''
             if not verify_copied_fx_state(src, dst, input_fx(chunk), input_fx(applied), 0x1000000)[0]:
+                diagnostics['input_fx'] = fx_difference_diagnostics(input_fx(chunk), input_fx(applied))
                 raise RuntimeError('Full input FX state verification failed')
             expected_depth = int(RPR_GetMediaTrackInfo_Value(src, 'I_FOLDERDEPTH')) if folder == 1 else 0
             if RPR_GetMediaTrackInfo_Value(dst, 'I_FOLDERDEPTH') != expected_depth:
@@ -4835,13 +4929,19 @@ def handle_duplicate_tracks(request):
         new_ids = template_object_guids(created)
         if any(not value or value in original_ids for value in new_ids) or len(set(new_ids)) != len(new_ids):
             raise RuntimeError('Copied track/FX/item/take identities are not new and unique')
-        if any(template_source_snapshot(t) != snapshots[recording_track_guid(t)] for t in before_tracks):
-            raise RuntimeError('Existing track/source state changed')
+        for track in before_tracks:
+            guid = recording_track_guid(track)
+            observed_source = template_source_snapshot(track)
+            if observed_source != snapshots[guid]:
+                diagnostics['existing_track'] = {'track_guid': guid, 'name': RPR_GetTrackName(track, '', 512)[2]}
+                diagnostics['existing_state'] = template_difference_diagnostics(snapshots[guid], observed_source)
+                raise RuntimeError('Existing track/source state changed')
         return {'success': True, 'created_tracks': [
             {'source_track_guid': s, 'track_guid': recording_track_guid(t),
              'track_index': int(RPR_GetMediaTrackInfo_Value(t, 'IP_TRACKNUMBER')),
              'name': RPR_GetTrackName(t, '', 512)[2]} for s, t in zip(source_guids, created)],
             'warnings': warnings, 'source_unchanged': True, 'verified_full_state': True,
+            'normalized_metadata': normalized_metadata,
             'external_routing': 'omitted', 'hardware_outputs': 'omitted',
             'main_send': 'preserved to duplicated parent or master at top level',
             'media_sources': 'shared; no physical files copied or modified'}
@@ -4867,7 +4967,8 @@ def handle_duplicate_tracks(request):
         except Exception:
             unchanged, restored = False, False
         return {'error': str(error), 'rollback_succeeded': restored, 'source_unchanged': unchanged,
-                'warnings': locals().get('warnings', []), 'rollback_errors': rollback_errors}
+                'warnings': locals().get('warnings', []), 'rollback_errors': rollback_errors,
+                'diagnostics': locals().get('diagnostics', {})}
     finally:
         for track in template_tracks():
             RPR_SetTrackSelected(track, track in selection)

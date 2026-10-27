@@ -34,3 +34,50 @@ class TemplateMCPTests(unittest.TestCase):
   tools=asyncio.run(server.mcp.list_tools())
   tool=next(t for t in tools if t.name=='duplicate_tracks')
   self.assertIn('source_track_guid',tool.input_schema['required'])
+
+
+class TemplateFidelityTests(unittest.TestCase):
+ def setUp(self):
+  self.n=load_functions({})
+  self.source='<TRACK\nNAME "Guitar"\nFREEMODE 2\nFIXEDLANES 9 0 0 0 0\nLANESOLO 3 0 0 0 0 0 0 0\nREC 1 1 1 0 0 0 0 0\nVOLPAN 0.4 0 1 -1\n>\n'
+  self.copy=self.source.replace('LANESOLO', 'LANEREC -1 -1 -1 0\nLANESOLO')
+ def compare(self,a,b,items=False):
+  return self.n['template_non_fx_comparison'](a,b,items)
+ def test_native_implicit_lane_default_only(self):
+  a,b,normalized=self.compare(self.source,self.copy)
+  self.assertEqual(a,b); self.assertEqual(len(normalized),1)
+  self.assertNotEqual(*self.compare(self.copy,self.source)[:2])
+ def test_nondefault_duplicate_other_mode_and_nested_are_rejected(self):
+  for value in ('LANEREC 0 -1 -1 0','LANEREC -1 0 -1 0','LANEREC -1 -1 0 0','LANEREC -1 -1 -1 1','LANEREC -1 -1 -1 0 0','LANEREC -1 -1 -1 0\nLANEREC -1 -1 -1 0'):
+   with self.subTest(value=value):
+    a,b,_=self.compare(self.source,self.copy.replace('LANEREC -1 -1 -1 0',value))
+    self.assertNotEqual(a,b)
+  a,b,_=self.compare(self.source.replace('FREEMODE 2','FREEMODE 1'),self.copy.replace('FREEMODE 2','FREEMODE 1'))
+  self.assertNotEqual(a,b)
+  a,b,_=self.compare(self.source,self.source.replace('VOLPAN','<EXTENSION\nLANEREC -1 -1 -1 0\n>\nVOLPAN'))
+  self.assertNotEqual(a,b)
+ def test_real_state_changes_remain_strict(self):
+  for old,new in [('VOLPAN 0.4','VOLPAN 0.5'),('REC 1 1 1','REC 1 2 1'),('REC 1 1 1','REC 1 1 0'),('FIXEDLANES 9','FIXEDLANES 8'),('LANESOLO 3','LANESOLO 2')]:
+   with self.subTest(field=old):
+    a,b,_=self.compare(self.source,self.copy.replace(old,new))
+    self.assertNotEqual(a,b)
+  a,b,_=self.compare(self.source,self.copy.replace('VOLPAN','UNKNOWN 123\nVOLPAN'))
+  self.assertNotEqual(a,b)
+ def test_only_authorized_arm_and_solo_changes(self):
+  source=self.source.replace('VOLPAN','MUTESOLO 0 1 0\nVOLPAN')
+  copy=self.copy.replace('REC 1','REC 0').replace('VOLPAN','MUTESOLO 0 0 0\nVOLPAN')
+  self.assertEqual(*self.compare(source,copy)[:2])
+ def test_included_item_data_is_not_normalized(self):
+  item='<ITEM\n<SOURCE MIDI\nLANEREC -1 -1 -1 0\n>\n>\n'
+  a,b,_=self.compare(self.source+item,self.copy+item.replace('-1 -1 -1 0','0 -1 -1 0'),True)
+  self.assertNotEqual(a,b)
+ def test_diagnostics_values_locations_privacy_and_limit(self):
+  result=self.n['template_difference_diagnostics'](self.source,self.copy.replace('VOLPAN 0.4','VOLPAN 0.5'))
+  entries=[d['observed'] for d in result['differences'] if d['observed']]
+  self.assertTrue(any(e.get('value')=='LANEREC -1 -1 -1 0' and e['path']=='TRACK' for e in entries))
+  self.assertTrue(any(e.get('value')=='VOLPAN 0.5 0 1 -1' for e in entries))
+  secret='OPAQUE_PAYLOAD'
+  result=self.n['template_difference_diagnostics']('<TRACK\n>','<TRACK\n<FXCHAIN\n<VST "secret plugin"\n'+secret+'\n>\n>\n>')
+  self.assertNotIn(secret,str(result));self.assertNotIn('secret plugin',str(result))
+  result=self.n['template_difference_diagnostics']('', '\n'.join('PRIVATE '+str(i) for i in range(30)))
+  self.assertEqual(len(result['differences']),16);self.assertTrue(result['truncated'])
