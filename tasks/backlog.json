@@ -1377,7 +1377,7 @@
       "id": "WR-028",
       "category": "mutation",
       "title": "Duplicate GUID-identified track or complete folder safely",
-      "status": "testing",
+      "status": "completed",
       "priority": "high",
       "capability": "duplicate_tracks",
       "description": "Native duplication with explicit insertion, descendant names, media policy and isolated routing.",
@@ -1397,7 +1397,7 @@
           "status": "fixed",
           "discovered_during": "runtime-validation",
           "fixed_in": "1a66cc6f539faf862abf18f3c79350de52eade8e",
-          "validation_notes": "REAPER 7.83 native duplication materializes only LANEREC -1 -1 -1 0 on the fixed-lane guitar. Scoped absent-to-default comparison, strict input preservation and bounded diagnostics passed 74 unit tests, 58 isolated host checks, deployment and live MCP duplication with no warnings. All temporary copies removed. Native Undo metadata side effect documented in docs/duplicate-tracks-regression.md. Awaiting explicit user acceptance of WR-028."
+          "validation_notes": "REAPER 7.83 native duplication materializes only LANEREC -1 -1 -1 0 on the fixed-lane guitar. Scoped absent-to-default comparison, strict input preservation and bounded diagnostics passed 74 unit tests, 58 isolated host checks, deployment and live MCP duplication with no warnings. All temporary copies removed. Native Undo metadata side effect documented in docs/duplicate-tracks-regression.md. Explicitly accepted by the user on 2026-10-27; WR-028 completed. Definitive FM-023 through FM-025 preparation remains pending for the FIRULET MAP chat."
         }
       ]
     },

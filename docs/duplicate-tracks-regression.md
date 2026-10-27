@@ -32,8 +32,9 @@ Unknown differences still fail. Successful normalization is reported explicitly.
 - Preserve native full FX/preset copying, GUID generation, internal routing,
   external/hardware routing exclusions, hierarchy, source snapshots, rollback and
   one operation Undo block.
-- Record BUG-021 under existing WR-028; capability remains testing pending user
-  acceptance.
+- Record BUG-021 under existing WR-028; the user explicitly accepted the fix on
+  2026-10-27 and WR-028 is completed. Definitive FM-023 through FM-025 preparation
+  remains pending for the FIRULET MAP chat.
 
 ## Validation
 
