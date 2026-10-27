@@ -1396,6 +1396,7 @@
           "description": "FM-022 fixed-lane guitar duplication materializes LANEREC -1 -1 -1 0 and fails strict residual verification; preserve fidelity with scoped comparison and bounded diagnostics.",
           "status": "fixed",
           "discovered_during": "runtime-validation",
+          "fixed_in": "1a66cc6f539faf862abf18f3c79350de52eade8e",
           "validation_notes": "REAPER 7.83 native duplication materializes only LANEREC -1 -1 -1 0 on the fixed-lane guitar. Scoped absent-to-default comparison, strict input preservation and bounded diagnostics passed 74 unit tests, 58 isolated host checks, deployment and live MCP duplication with no warnings. All temporary copies removed. Native Undo metadata side effect documented in docs/duplicate-tracks-regression.md. Awaiting explicit user acceptance of WR-028."
         }
       ]
