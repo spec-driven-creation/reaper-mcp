@@ -211,6 +211,26 @@ The deployment script must:
 
 A bridge change must not be committed or pushed if validation or deployment fails.
 
+### User-Controlled Reload and REAPER Testing
+
+When changing the MCP server or REAPER bridge:
+
+1. Complete local implementation, automated checks, and required deployment.
+2. Tell the user exactly what must be reloaded or reconnected (for example,
+   the deployed bridge ReaScript or the MCP server connection).
+3. Wait for the user's explicit confirmation that the required updates are ready
+   before running any tests against REAPER, including read-only MCP queries,
+   MCP Inspector calls that reach REAPER, and integration scripts.
+
+Do not open or launch REAPER instances, or start, stop, restart, or reload the
+bridge on your own. The user performs these actions. Deployment copies the
+validated file; it does not authorize restarting the running bridge.
+
+Local checks and tool discovery that do not contact REAPER may proceed without
+this confirmation. If confirmation is pending, report runtime validation as
+pending and keep implemented backlog work in `testing` after successful local
+validation and required deployment. Do not claim REAPER integration passed.
+
 ### Git Commit and Push
 
 After all requested changes have been successfully validated and any required

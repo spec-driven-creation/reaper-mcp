@@ -98,8 +98,11 @@
       "acceptance_criteria": [
         "AGENTS.md documents architecture and validation requirements.",
         "Bridge changes require successful syntax validation and deployment before commit.",
-        "Only task-related files are staged, committed, and pushed to the configured upstream."
-      ]
+        "Only task-related files are staged, committed, and pushed to the configured upstream.",
+        "After MCP changes, explain required reloads/reconnections and wait for explicit user readiness before any REAPER runtime tests, including read-only queries.",
+        "The user controls REAPER instances and bridge startup/reloads; agents do not launch instances or restart the bridge on their own."
+      ],
+      "validation_notes": "2026-10-31: Extended AGENTS.md at the user request with user-controlled reloads and explicit readiness before REAPER runtime tests; local checks and discovery without REAPER remain allowed. JSON and diff checks passed. No runtime or deployment change."
     },
     {
       "id": "TL-003",
