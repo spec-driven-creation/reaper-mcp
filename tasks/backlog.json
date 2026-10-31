@@ -1442,7 +1442,7 @@
       "id": "RO-028",
       "category": "read-only",
       "title": "Read complete media item notes",
-      "status": "testing",
+      "status": "completed",
       "priority": "high",
       "capability": "read_item_notes",
       "description": "Read P_NOTES individually or for all track items without changing project state.",
@@ -1456,7 +1456,7 @@
         "Preserve Unicode, multiline text, fields and one-based indexes with and without takes.",
         "Validate invalid indexes, API failures, MCP contract and live Notes Harmony without mutation."
       ],
-      "validation_notes": "2026-10-31: 79 automated tests passed (empty/multiline/Unicode/long text, takes/no takes, 83 items, invalid indexes/options, API failure, read-only state and large TCP response). Source compile, probe syntax, backlog JSON, README lint and diff checks passed. MCP Inspector discovered include_notes:boolean=false via the server module. Syntax-validated bridge deployment succeeded. Live MCP confirmed turbulence.rpp and Notes Harmony at index 9; running bridge still returns the old format without notes. UI reload failed with geometry/monitor errors and CLI probe produced no evidence. Live 83-note read and state-preservation verification remain pending; see docs/item-notes-validation.md and scripts/validate_item_notes_in_reaper.lua. Await explicit user acceptance. Follow-up live MCP validation after user restart: all 83 nonempty notes read in one call; Notes Harmony initially index 9, moved externally to 4 during individual comparison. Rediscovery and repeated batches preserved all 83 GUID/text pairs; individual items 1, 37 and 83 matched exactly with zero takes; default omitted notes and final full batch was unchanged. Only read MCP tools used. Global context changed externally (selection/cursor/playback), so no global invariance claim; full individual comparison interrupted at 37. Live batch acceptance evidence passed; user acceptance pending. BUG-022 not reproduced after restart but root cause remains unconfirmed.",
+      "validation_notes": "2026-10-31: 79 automated tests passed (empty/multiline/Unicode/long text, takes/no takes, 83 items, invalid indexes/options, API failure, read-only state and large TCP response). Source compile, probe syntax, backlog JSON, README lint and diff checks passed. MCP Inspector discovered include_notes:boolean=false via the server module. Syntax-validated bridge deployment succeeded. Live MCP confirmed turbulence.rpp and Notes Harmony at index 9; running bridge still returns the old format without notes. UI reload failed with geometry/monitor errors and CLI probe produced no evidence. Live 83-note read and state-preservation verification remain pending; see docs/item-notes-validation.md and scripts/validate_item_notes_in_reaper.lua. Follow-up live MCP validation after user restart: all 83 nonempty notes read in one call; Notes Harmony initially index 9, moved externally to 4 during individual comparison. Rediscovery and repeated batches preserved all 83 GUID/text pairs; individual items 1, 37 and 83 matched exactly with zero takes; default omitted notes and final full batch was unchanged. Only read MCP tools used. Global context changed externally (selection/cursor/playback), so no global invariance claim; full individual comparison interrupted at 37. Live batch acceptance evidence passed. Explicitly accepted by the user on 2026-10-31; RO-028 completed. BUG-022 not reproduced after restart but root cause remains unconfirmed.",
       "bugs": []
     }
   ]
