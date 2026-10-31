@@ -707,3 +707,7 @@ string, preserving Unicode, whitespace and line breaks, or `""` when empty.
 An API read failure returns an error rather than an empty note. No project,
 selection, cursor or playback state is changed. Restart the deployed bridge
 ReaScript and reconnect the MCP server to load the updated tool schema.
+
+If a deferred bridge callback fails, the REAPER console now receives the full
+Python traceback instead of leaving only the generic deferred-execution dialog.
+The failed callback stops; it does not restart itself or change the project.

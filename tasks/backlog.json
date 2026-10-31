@@ -45,6 +45,15 @@
         "The bridge listens for requests while running inside REAPER.",
         "Direct RPR API calls remain inside reaper/mcp_bridge.py.",
         "Commands are resolved through COMMAND_HANDLERS and unknown commands return structured errors."
+      ],
+      "bugs": [
+        {
+          "id": "BUG-022",
+          "description": "User reports only Deferred script execution error when starting deployed bridge; connected MCP still serves the old item-info format. Capture callback traceback before determining root cause.",
+          "status": "open",
+          "discovered_during": "runtime-validation",
+          "validation_notes": "2026-10-31: source and deployed SHA256 match. New notes callbacks are not invoked during bridge startup. Root cause unconfirmed; no detailed error is exposed by REAPER dialog. Added deferred callback traceback output with no retry; 80 automated tests, compilation, JSON, README lint and diff checks passed. Syntax-validated deployment succeeded. Host execution of diagnostic and root-cause fix remain pending; see docs/item-notes-validation.md."
+        }
       ]
     },
     {

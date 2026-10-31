@@ -31,6 +31,32 @@ def load_bridge_receive_request():
 
 
 class TransportTests(unittest.TestCase):
+    def test_deferred_callback_reports_full_exception_and_does_not_retry(self):
+        tree = ast.parse((REPOSITORY_ROOT / "reaper/mcp_bridge.py").read_text(encoding="utf-8"))
+        loop_node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "loop")
+        callbacks = []
+        messages = []
+
+        class IdleServer:
+            def accept(self):
+                raise BlockingIOError()
+
+        namespace = {"server": IdleServer(), "RPR_defer": callbacks.append,
+                     "RPR_ShowConsoleMsg": messages.append}
+        exec(compile(ast.Module(body=[loop_node], type_ignores=[]), "bridge-loop", "exec"), namespace)
+        namespace["loop"]()
+        self.assertEqual(len(callbacks), 1)
+        # Successful callback continues the existing deferred loop.
+        exec(callbacks[0], namespace)
+        self.assertEqual(len(callbacks), 2)
+        self.assertEqual(messages, [])
+        del namespace["loop"]
+        exec(callbacks[0], namespace)
+        self.assertIn("Traceback", messages[-1])
+        self.assertIn("NameError", messages[-1])
+        self.assertIn("loop", messages[-1])
+        self.assertEqual(len(callbacks), 2)
+
     def test_bridge_receives_request_larger_than_one_chunk(self):
         receive_request = load_bridge_receive_request()
         sender, receiver = socket.socketpair()

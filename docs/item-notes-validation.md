@@ -54,3 +54,18 @@ passed in this session. It is distinct from automated mocked tests and does
 not replace end-to-end MCP verification of the reloaded bridge.
 
 RO-028 remains `testing`, pending runtime verification and explicit acceptance.
+
+## Deferred execution error follow-up
+
+The user reported that restarting displays only `Deferred script execution
+error`, without a traceback. BUG-022 is recorded under FN-003 and remains open:
+the root cause has not been established. Source and deployed files matched by
+SHA256. Connected MCP continued returning the old item-info contract.
+
+The deferred callback now catches otherwise unreported exceptions and prints
+the complete Python traceback to the REAPER console. It stops on failure and
+does not retry or modify project state. The test exercises both successful
+rescheduling and a missing callback name, verifying full traceback output and
+no retry. All 80 automated tests, compilation, backlog JSON, README lint and
+diff checks passed; syntax validation and deployment succeeded. Host validation
+of this diagnostic is pending a new script start; it is not a root-cause fix.

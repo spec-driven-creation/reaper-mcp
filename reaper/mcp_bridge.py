@@ -4158,7 +4158,14 @@ def loop():
     except Exception as error:
         RPR_ShowConsoleMsg(f"MCP bridge error: {error}\n")
 
-    RPR_defer("loop()")
+    # REAPER otherwise reduces callback exceptions to a generic deferred error.
+    RPR_defer(
+        "try:\n"
+        "    loop()\n"
+        "except Exception:\n"
+        "    import traceback\n"
+        "    RPR_ShowConsoleMsg(traceback.format_exc())\n"
+    )
 
 def resolve_recording_track(request, field="track_index", guid_field="track_guid"):
     context, error = resolve_track({"track_index": request.get(field)})
