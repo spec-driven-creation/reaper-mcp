@@ -1,5 +1,37 @@
 # Item notes validation
 
+## Successful live MCP read after user restart (2026-10-31)
+
+The user restarted REAPER and the bridge with Turbulence open. All validation
+actions in this run were read-only MCP queries; no UI actions, script launches,
+restart attempts or mutation tools were used.
+
+`get_tracks` initially confirmed `Notes Harmony` at index 9 in `turbulence.rpp`
+with 14 tracks. `get_track_items(include_notes=true)` returned 83 items with
+83 nonempty note strings. Initial examples: Am11, Fmaj13, Cmaj9, G6/9; item 83
+was G6/9. Default calls omitted notes as documented.
+
+During sequential individual queries, the track order changed externally:
+index 9 became skt_gtr_lead, so the comparison stopped at item 37 with an
+out-of-range response. Fresh discovery resolved Notes Harmony at index 4.
+A new batch returned all 83 identical GUID/text pairs from the first batch.
+Individual items 1, 37 and 83 matched the batch by GUID and exact note string,
+and each reported zero takes. A final batch exactly matched that new batch,
+including all existing timing, GUID and selection fields.
+
+Selection, cursor and playback changed during this run (playback was initially
+stopped and later playing). Consequently a global before/after invariance claim
+is not possible for this interactive session. The validation itself invoked
+only read tools, and all 83 item identities/texts were preserved across batches.
+Full 83-item individual comparison was interrupted, not passed. Empty,
+multiline and Unicode fixtures remain automated-test evidence, separate from
+the real project text read. The standalone host probe below was not executed.
+
+Live batch reading and representative individual reads now pass. RO-028 remains
+`testing` until explicit user acceptance. The bridge successfully served the
+updated notes contract after user restart; BUG-022's earlier root cause remains
+unconfirmed, so it is not marked fixed.
+
 ## Automated checks (2026-10-31)
 
 `uv run python -m unittest discover -s tests`: 79 tests passed, including five
