@@ -1,4 +1,5 @@
 import ast
+import json
 import socket
 import threading
 import unittest
@@ -50,6 +51,7 @@ class TransportTests(unittest.TestCase):
         listener.listen(1)
         port = listener.getsockname()[1]
         received = []
+        expected = {"notes": "armonía ♯ 日本語 🎵\n" * 2000}
 
         def serve_once():
             connection, _ = listener.accept()
@@ -66,8 +68,9 @@ class TransportTests(unittest.TestCase):
                     chunks.append(chunk)
 
                 received.append(b"".join(chunks))
-                connection.sendall(b'{"value":')
-                connection.sendall(b"123}")
+                payload = json.dumps(expected, ensure_ascii=False).encode("utf-8")
+                for offset in range(0, len(payload), 1001):
+                    connection.sendall(payload[offset:offset + 1001])
 
         worker = threading.Thread(target=serve_once)
         worker.start()
@@ -85,7 +88,7 @@ class TransportTests(unittest.TestCase):
 
         self.assertFalse(worker.is_alive())
         self.assertGreater(len(received[0]), 4096)
-        self.assertEqual(response, {"value": 123})
+        self.assertEqual(response, expected)
 
 
 if __name__ == "__main__":

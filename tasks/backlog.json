@@ -1428,6 +1428,27 @@
           "validation_notes": "Lua and Python confirmed a valid direct WAVE pointer but native source offline, length 0 and sample rate 0; the disk WAV remains readable at 7.4755625 seconds. Added separate pointer/file/native metadata and optional SWS online diagnostics without file-duration fallback or auto-online mutation. A copied PCM24/96kHz WAV returned 7.4755625 natively and the requested 3.125/6.53/3.405/3.125 edges with invariant samples; 68 unit tests and 65 isolated REAPER checks passed, including offline/missing source, bounds, loops, Undo/Redo and rollback. Bridge deployment and MCP discovery passed; existing live bridge must be restarted to load the fix."
         }
       ]
+    },
+    {
+      "id": "RO-028",
+      "category": "read-only",
+      "title": "Read complete media item notes",
+      "status": "testing",
+      "priority": "high",
+      "capability": "read_item_notes",
+      "description": "Read P_NOTES individually or for all track items without changing project state.",
+      "depends_on": [
+        "RO-012",
+        "RO-014"
+      ],
+      "acceptance_criteria": [
+        "get_item_info always returns notes, empty when absent.",
+        "get_track_items includes full notes only with include_notes=true, default false.",
+        "Preserve Unicode, multiline text, fields and one-based indexes with and without takes.",
+        "Validate invalid indexes, API failures, MCP contract and live Notes Harmony without mutation."
+      ],
+      "validation_notes": "2026-10-31: 79 automated tests passed (empty/multiline/Unicode/long text, takes/no takes, 83 items, invalid indexes/options, API failure, read-only state and large TCP response). Source compile, probe syntax, backlog JSON, README lint and diff checks passed. MCP Inspector discovered include_notes:boolean=false via the server module. Syntax-validated bridge deployment succeeded. Live MCP confirmed turbulence.rpp and Notes Harmony at index 9; running bridge still returns the old format without notes. UI reload failed with geometry/monitor errors and CLI probe produced no evidence. Live 83-note read and state-preservation verification remain pending; see docs/item-notes-validation.md and scripts/validate_item_notes_in_reaper.lua. Await explicit user acceptance.",
+      "bugs": []
     }
   ]
 }

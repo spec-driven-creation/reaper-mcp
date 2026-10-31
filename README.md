@@ -336,7 +336,7 @@ most include additional identity and raw/readable fields useful to clients.
 
 | Tool | Mode | Input | Purpose and constraints | Response summary | Example request |
 | --- | --- | --- | --- | --- | --- |
-| `get_track_items` | Read-only | `track_index: int` | Return only items belonging to one valid track. | `items` with one-based indexes, GUIDs, seconds, measures/beats, and state flags. | `{"track_index": 9}` |
+| `get_track_items` | Read-only | `track_index: int`, `include_notes: bool = false` | Return only items belonging to one valid track. | `items` with one-based indexes, GUIDs, seconds, measures/beats, and state flags; complete `notes` when requested. | `{"track_index": 9, "include_notes": true}` |
 | `get_item_info` | Read-only | `track_index: int`, `item_index: int` | Inspect one item by its current one-based index on a track. | Item identity, timing, musical boundaries, state, notes, and take details. | `{"track_index": 9, "item_index": 1}` |
 | `get_item_takes` | Read-only | `track_index: int`, `item_index: int` | List takes belonging to one item. | Take count, active state, MIDI/source information, and take names. | `{"track_index": 9, "item_index": 1}` |
 
@@ -693,3 +693,17 @@ can still be conservatively rejected. There is no blanket binary-state exception
 External routing with associated automation may also be conservatively rejected
 when removal changes otherwise verified state. Audio equivalence is not auditioned.
 Restart the deployed bridge and reconnect the MCP server after adding a tool.
+
+### Reading item notes
+
+`get_item_info` always returns `notes`. To read every item text on a track in
+one call, use `get_track_items(track_index=9, include_notes=True)` (MCP arguments:
+`{"track_index": 9, "include_notes": true}`). Confirm the current track name/index
+with `get_tracks` first. `include_notes` defaults to false and omits the field.
+
+Both tools read live REAPER `P_NOTES` via `GetSetMediaItemInfo_String` with
+`setNewValue=false`, for items with or without takes. `notes` is the complete
+string, preserving Unicode, whitespace and line breaks, or `""` when empty.
+An API read failure returns an error rather than an empty note. No project,
+selection, cursor or playback state is changed. Restart the deployed bridge
+ReaScript and reconnect the MCP server to load the updated tool schema.

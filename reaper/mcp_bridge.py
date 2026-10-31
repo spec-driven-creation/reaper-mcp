@@ -1211,6 +1211,13 @@ def get_item_identity(item):
     )
     return guid_info[3]
 
+def get_item_notes(item):
+    notes_info = RPR_GetSetMediaItemInfo_String(item, "P_NOTES", "", False)
+    if not notes_info[0]:
+        raise RuntimeError("REAPER failed to read item P_NOTES")
+    return notes_info[3]
+
+
 def get_item_state(item, item_index):
     position = RPR_GetMediaItemInfo_Value(item, "D_POSITION")
     duration = RPR_GetMediaItemInfo_Value(item, "D_LENGTH")
@@ -1543,19 +1550,27 @@ def handle_get_track_routing(request):
     }
 
 def handle_get_track_items(request):
+    include_notes = request.get("include_notes", False)
+    if not isinstance(include_notes, bool):
+        return {"error": "include_notes must be a boolean"}
+
     context, error = resolve_track(request)
 
     if error is not None:
         return error
 
     item_count = RPR_CountTrackMediaItems(context["track"])
-    items = [
-        get_item_state(
-            RPR_GetTrackMediaItem(context["track"], item_index),
-            item_index + 1
-        )
-        for item_index in range(item_count)
-    ]
+    items = []
+    for item_index in range(item_count):
+        item = RPR_GetTrackMediaItem(context["track"], item_index)
+        state = get_item_state(item, item_index + 1)
+        if include_notes:
+            try:
+                state["notes"] = get_item_notes(item)
+            except RuntimeError as error:
+                return {"error": str(error), "item_index": item_index + 1,
+                        "track_index": context["track_index"]}
+        items.append(state)
 
     return {
         "track_index": context["track_index"],
@@ -1586,6 +1601,11 @@ def handle_get_item_info(request):
 
     item = context["item"]
     item_state = get_item_state(item, context["item_index"])
+    try:
+        item_state["notes"] = get_item_notes(item)
+    except RuntimeError as error:
+        return {"error": str(error), "item_index": context["item_index"],
+                "track_index": context["track_index"]}
     take_count = RPR_CountTakes(item)
     active_take = RPR_GetActiveTake(item)
 
